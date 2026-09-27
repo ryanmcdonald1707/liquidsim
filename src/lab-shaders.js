@@ -118,8 +118,12 @@ vec3 steel(vec3 n, vec3 v, vec3 refl) {
 vec3 inscatter(vec3 q, vec3 sa, vec3 ss) {
   vec3 st = sa + ss;
   vec3 seff = min(st, sqrt(3.0 * sa * st) + sa);
-  float tl = min(wallDist(q, LW), (SURF_Y - q.y) / max(LW.y, 1e-3));
-  float esc = max(min(R_IN - length(q.xz), SURF_Y - q.y), 0.0);
+  // distances light travels through the liquid to reach q; measured to the
+  // local (meniscus-raised) surface and never negative - a negative path
+  // would turn attenuation into amplification
+  float top = SURF_Y + surfH(q.xz);
+  float tl = max(min(wallDist(q, LW), (top - q.y) / max(LW.y, 1e-3)), 0.0);
+  float esc = max(min(R_IN - length(q.xz), top - q.y), 0.0);
   vec3 lit = vec3(1.0, 0.97, 0.94) * WIN_E * 0.55 * exp(-seff * tl) + ambient(vec3(0.0, 1.0, 0.0)) * exp(-seff * esc);
   return kmAlbedo(sa, ss) / PI * lit;
 }
@@ -135,8 +139,8 @@ vec3 marchLiquid(vec3 p, vec3 d, float jit) {
     float te = min(tw, min(tb, ts));
     // stratified steps, packed towards the entry point where dense liquids
     // (coffee, milk, juice) do all their scattering
-    int N = seg == 0 ? 30 : 12;
-    for (int i = 0; i < 30; i++) {
+    int N = seg == 0 ? 40 : 12;
+    for (int i = 0; i < 40; i++) {
       if (i >= N) break;
       float u0 = float(i) / float(N), u1 = float(i + 1) / float(N);
       float tA = te * u0 * u0, tB = te * u1 * u1, ds = tB - tA;
@@ -205,7 +209,7 @@ void main() {
   float fr = (uIor - 1.0) / (uIor + 1.0), f0 = fr * fr;
   float F = fresnel(dot(N, V), f0);
   vec3 refl = sceneRay(p, R);
-  vec3 body = marchLiquid(p - N * 1e-5, refract(-V, N, 1.0 / uIor), hash12(gl_FragCoord.xy + fract(uTime) * 61.0));
+  vec3 body = marchLiquid(p - N * 1e-5, refract(-V, N, 1.0 / uIor), 0.5 + 0.3 * (hash12(gl_FragCoord.xy) - 0.5));
   o = vec4(min(refl * F + body * (1.0 - F), vec3(40.0)), 1.0);
 }
 `;
@@ -237,7 +241,7 @@ void main() {
     return;
   }
   vec3 d = refract(rd, n, 1.0 / uIor);
-  o = vec4(min(marchLiquid(e + d * 1e-5, d, hash12(gl_FragCoord.xy + fract(uTime) * 61.0)) * 0.95, vec3(40.0)), 1.0);
+  o = vec4(min(marchLiquid(e + d * 1e-5, d, 0.5 + 0.3 * (hash12(gl_FragCoord.xy) - 0.5)) * 0.95, vec3(40.0)), 1.0);
 }
 `;
 
