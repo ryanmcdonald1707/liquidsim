@@ -9,6 +9,7 @@ uniform vec3 uCupPos;
 uniform float uTime;
 uniform sampler2D uWet;
 uniform vec3 uCamPos;
+uniform float uSpill, uSpillAng;
 
 const vec3 LW = normalize(vec3(sin(WIN_AZ) * cos(WIN_ELC), sin(WIN_ELC), -cos(WIN_AZ) * cos(WIN_ELC)));
 const vec3 LAMP = normalize(vec3(0.62, 0.62, 0.48));
@@ -186,6 +187,41 @@ vec3 shadeCeramic(vec3 p, vec3 n, vec3 v, float interior) {
     // the dark coffee right below absorbs the bounce light
     ao *= mix(1.0, 0.75, 1.0 - smoothstep(0.0, 0.01, p.y - SURF_Y));
   } else {
+    // coffee that spilled over the rim: a drip down the outside and a pool
+    // in the saucer well, on the side where it overtopped
+    if (uSpill > 0.0) {
+      float ang = atan(p.z, p.x);
+      float rr = length(p.xz);
+      // arc length from the spill point along the outer wall (m)
+      float s = (mod(ang - uSpillAng + PI, 2.0 * PI) - PI) * R_OUT;
+      float fall = RIM_Y - p.y;
+      float onWall = step(R_OUT - 0.0015, rr) * step(rr, R_OUT + 0.003) * step(0.0, fall) * step(SAUCER_H, p.y);
+      // a sheet over the lip that breaks up into meandering rivulets, each
+      // ending in a bead where it ran out of liquid
+      float halfW = 0.004 + 0.010 * uSpill;
+      float film = (1.0 - smoothstep(halfW * 0.7, halfW, abs(s))) * (1.0 - smoothstep(0.002, 0.007, fall));
+      float drops = 0.0;
+      for (int i = 0; i < 5; i++) {
+        float fi = float(i);
+        float h1 = hash12(vec2(fi, 3.1)), h2 = hash12(vec2(fi, 7.7));
+        float c0 = (fi - 2.0) / 2.0 * halfW * 0.8 + (h1 - 0.5) * 0.002;
+        float len = (0.25 + 0.75 * h2) * (0.02 + 0.08 * uSpill);
+        float x = s - c0 - 0.0012 * sin(fall * 260.0 + fi * 2.0) * smoothstep(0.0, 0.01, fall);
+        float w = mix(0.0016, 0.0009, fall / len) + 0.0012 * exp(-pow((fall - len) / 0.0022, 2.0));
+        drops = max(drops, (1.0 - smoothstep(w * 0.6, w, abs(x))) * step(fall, len + 0.0018) * (0.55 + 0.45 * smoothstep(len - 0.004, len, fall)));
+      }
+      float drip = max(film * 0.7, drops) * onWall;
+      // a puddle where the rivulets reach the saucer, spreading around the foot
+      float pr = 0.004 + 0.016 * uSpill;
+      vec2 e = vec2(s / (pr * 2.2), (rr - R_OUT - 0.4 * pr) / pr);
+      float pd = length(e) + 0.2 * (vnoise(p.xz * 220.0) - 0.5);
+      float pool = (1.0 - smoothstep(0.8, 1.0, pd)) * step(p.y, SAUCER_H - 0.0005);
+      float c = max(drip, pool) * min(1.0, uSpill * 3.0);
+      // thin films are translucent tan, thick ones nearly black-brown
+      float thick = max(drops, pool * smoothstep(1.0, 0.2, pd));
+      alb = mix(alb, mix(vec3(0.45, 0.27, 0.15), vec3(0.13, 0.055, 0.025), thick), c * 0.9);
+      gloss = max(gloss, c);
+    }
     sh = exteriorShadow(p);
     ao = 1.0 - 0.45 * exp(-max(p.y - CUP_Y0, 0.0) / 0.006) * step(length(p.xz), 0.07);
     sh = min(sh, 1.0);
@@ -437,6 +473,7 @@ uniform sampler2D uProfiles;
 uniform int uM;
 uniform float uNr;
 uniform float uSpike, uSpikeK; // ferrofluid: Rosensweig spike height (mm), wavenumber (1/m)
+uniform float uK2, uMeanH2;     // second-order (Stokes) correction: mean k (1/m), <eta^2> (mm^2)
 in vec2 vUv;
 out vec4 o;
 // Hexagonal lattice of peaks (three plane waves 120 deg apart), sharpened into
@@ -469,6 +506,16 @@ void main() {
   ht *= 0.001 / r; // mm -> m, and 1/r for the angular derivative
   float c = cs1.x, s = cs1.y;
   vec2 grad = vec2(c * hr - s * ht, s * hr + c * ht);
+  // Second-order Stokes correction: eta2 = k (eta^2 - <eta^2>) sharpens the
+  // crests and flattens the troughs of steep waves (bound harmonics).
+  float k2 = uK2 * 1e-3;
+  float h2 = k2 * (h * h - uMeanH2);
+  grad *= 1.0 + 2.0 * k2 * h;
+  h += h2;
+  // the static part (meniscus + vortex dip) rides in the m = 0 sine channel
+  vec4 P0 = texture(uProfiles, vec2(u, 0.5 / rows));
+  h += P0.y;
+  grad += P0.w * cs1;
   if (uSpike > 0.0) {
     float e = 0.00015;
     h += uSpike * spikeField(q);
@@ -581,6 +628,7 @@ void main() {
 
 export const jacobiFS = flowCommon + /* glsl */ `
 uniform sampler2D uP, uDiv;
+uniform float uOmega; // weighted-Jacobi relaxation (0 = plain Jacobi)
 void main() {
   float h = 2.0 * R_IN * uTexel.x;
   float C = texture(uP, vUv).x;
@@ -590,8 +638,37 @@ void main() {
   float B = inside(db) > 0.5 ? texture(uP, db).x : C;
   float T = inside(dt) > 0.5 ? texture(uP, dt).x : C;
   float div = texture(uDiv, vUv).x;
-  o = vec4((L + R + B + T - h * h * div) * 0.25 * inside(vUv), 0.0, 0.0, 1.0);
+  float jac = (L + R + B + T - h * h * div) * 0.25;
+  float w = uOmega > 0.0 ? uOmega : 1.0;
+  o = vec4(mix(C, jac, w) * inside(vUv), 0.0, 0.0, 1.0);
 }
+`;
+
+// Multigrid helpers for the pressure Poisson problem  lap(p) = div,
+// with Neumann (no-flux) conditions on the circular wall.
+export const residualFS = flowCommon + /* glsl */ `
+uniform sampler2D uP, uDiv;
+void main() {
+  float h = 2.0 * R_IN * uTexel.x;
+  float C = texture(uP, vUv).x;
+  vec2 dl = vUv - vec2(uTexel.x, 0), dr = vUv + vec2(uTexel.x, 0), db = vUv - vec2(0, uTexel.y), dt = vUv + vec2(0, uTexel.y);
+  float L = inside(dl) > 0.5 ? texture(uP, dl).x : C;
+  float R = inside(dr) > 0.5 ? texture(uP, dr).x : C;
+  float B = inside(db) > 0.5 ? texture(uP, db).x : C;
+  float T = inside(dt) > 0.5 ? texture(uP, dt).x : C;
+  float lap = (L + R + B + T - 4.0 * C) / (h * h);
+  o = vec4((texture(uDiv, vUv).x - lap) * inside(vUv), 0.0, 0.0, 1.0);
+}
+`;
+// restriction: a bilinear tap at a coarse texel centre averages 2x2 fine texels
+export const restrictFS = flowCommon + /* glsl */ `
+uniform sampler2D uSrc;
+void main() { o = vec4(texture(uSrc, vUv).x * inside(vUv), 0.0, 0.0, 1.0); }
+`;
+// prolongation: add the bilinearly interpolated coarse-grid correction
+export const prolongFS = flowCommon + /* glsl */ `
+uniform sampler2D uP, uE;
+void main() { o = vec4((texture(uP, vUv).x + texture(uE, vUv).x) * inside(vUv), 0.0, 0.0, 1.0); }
 `;
 
 export const gradFS = flowCommon + /* glsl */ `

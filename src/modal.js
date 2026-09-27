@@ -222,6 +222,47 @@ export class ModalSurface {
     }
   }
 
+  // The waves are carried by the mean swirl: in a flow rotating at Omega a
+  // pattern with angular number m is Doppler-shifted by m*Omega, i.e. each
+  // cos/sin mode pair rotates by the angle m*Omega*dt.
+  rotate(Omega, dt) {
+    if (Omega === 0) return;
+    const { n, a, v, mOrd, isSin } = this;
+    for (let i = 0; i + 1 < n; i++) {
+      const m = mOrd[i];
+      if (m === 0 || isSin[i] || !isSin[i + 1] || mOrd[i + 1] !== m) continue;
+      const ph = m * Omega * dt, c = Math.cos(ph), sn = Math.sin(ph);
+      const ac = a[i], as = a[i + 1], vc = v[i], vs = v[i + 1];
+      a[i] = ac * c - as * sn; a[i + 1] = ac * sn + as * c;
+      v[i] = vc * c - vs * sn; v[i + 1] = vc * sn + vs * c;
+      i++;
+    }
+  }
+
+  // Spectral statistics for the nonlinear corrections: energy-weighted mean
+  // wavenumber, mean square elevation over the disk (m^2) and RMS slope.
+  spectrum() {
+    let e = 0, ek = 0, ek2 = 0;
+    for (let i = 0; i < this.n; i++) { const a2 = this.a[i] * this.a[i]; e += a2; ek += a2 * this.k[i]; ek2 += a2 * this.k[i] * this.k[i]; }
+    const area = Math.PI * this.R * this.R;
+    return { kMean: e > 0 ? ek / e : 0, meanH2: e / area, slope: Math.sqrt(ek2 / area) };
+  }
+
+  // Wave breaking: once the surface gets too steep, the shortest waves
+  // spill and lose energy first (whitecapping), instead of every mode being
+  // scaled down together.
+  breakWaves(dt, threshold = 0.28) {
+    const sp = this.spectrum();
+    if (sp.slope <= threshold) return 0;
+    const excess = sp.slope / threshold - 1;
+    for (let i = 0; i < this.n; i++) {
+      const w = Math.min(1, (this.k[i] / Math.max(sp.kMean, 1)) ** 2);
+      const f = Math.exp(-dt * 25 * excess * w);
+      this.a[i] *= f; this.v[i] *= f;
+    }
+    return excess;
+  }
+
   // Slowest decay rate of the fundamental slosh mode (1/s) and its frequency (Hz).
   sloshInfo() {
     const i = this.mOrd.indexOf(1);

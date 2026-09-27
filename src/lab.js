@@ -2,6 +2,7 @@ import { ModalSurface } from './modal.js';
 import * as G from './gl.js';
 import * as geo from './geometry.js';
 import * as S from './shaders.js';
+import { createMultigrid } from './multigrid.js';
 import * as LS from './lab-shaders.js';
 import { LIQUIDS, ADDITIVES, CATEGORIES } from './liquids.js';
 
@@ -45,6 +46,7 @@ const state = {
 };
 let modal = null, M = 0, Nr = 256, profiles = null, profTex = null;
 let men = { h: 0, lc: 0.0027 };
+const stokes = { k: 0, h2: 0 };
 
 const L = gl.LINEAR, NEAR = gl.NEAREST;
 const RGBA16F = [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT];
@@ -101,6 +103,9 @@ const P = {
   force: G.program(gl, flowSrc(S.fsVS), flowSrc(S.forceFS)),
   div: G.program(gl, flowSrc(S.fsVS), flowSrc(S.divFS)),
   jacobi: G.program(gl, flowSrc(S.fsVS), flowSrc(S.jacobiFS)),
+  residual: G.program(gl, flowSrc(S.fsVS), flowSrc(S.residualFS)),
+  restrict: G.program(gl, flowSrc(S.fsVS), flowSrc(S.restrictFS)),
+  prolong: G.program(gl, flowSrc(S.fsVS), flowSrc(S.prolongFS)),
   grad: G.program(gl, flowSrc(S.fsVS), flowSrc(S.gradFS)),
   advectDye: G.program(gl, flowSrc(S.fsVS), flowSrc(S.advectDyeFS)),
   maccormack: G.program(gl, flowSrc(S.fsVS), flowSrc(S.maccormackFS)),
@@ -174,6 +179,9 @@ function pass(prog, dst, uniforms) {
   G.use(gl, prog, uniforms);
   meshes.quad.draw();
 }
+const mg = createMultigrid(gl, VRES, P, pass);
+// a blend weight defined per 1/60 s frame, converted to this step's dt
+const perFrame = (w, dt) => 1 - Math.pow(1 - w, dt * 60);
 function clearTargets(...ts) {
   for (const t of ts) { gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); }
 }
@@ -493,7 +501,7 @@ function stepPhysics(dt) {
     uSpoon: [rod.pos[0], rod.pos[1], 0.0045, rod.blend > 0.8 ? 1 : 0], uSpoonVel: rod.vel, uKick: [0, 0, 0],
   }); vel.swap();
   pass(P.div, divT, { uVel: vel.read.tex, uDye: dye.read.tex, uTexel: vt });
-  for (let i = 0; i < 36; i++) { pass(P.jacobi, pres.write, { uP: pres.read.tex, uDiv: divT.tex, uTexel: vt }); pres.swap(); }
+  mg.solve(pres, divT);
   pass(P.grad, vel.write, { uVel: vel.read.tex, uP: pres.read.tex, uDt: dt, uTexel: vt }); vel.swap();
 
   // additive transport
@@ -513,7 +521,7 @@ function stepPhysics(dt) {
     uPour: pouring && !oilPouring ? [state.pourPos[0], state.pourPos[1], add.drops ? 0.003 : 0.0045, (sink ? 0.4 : rate) * Math.min(1, state.pour * 3)] : [0, 0, 0, 0],
     uOilPour: oilPouring ? [state.pourPos[0], state.pourPos[1], 0.005, 2.0 * Math.min(1, state.pour * 3)] : [0, 0, 0, 0],
     uFoamFromPour: 0,
-    uFroth: [0, 0, 0, 0], uDecay: [decay, 0, 0], uDiffuse: diffuse, uDiffuseG: 0.02, uCap: cap, uSrcGain: srcGain,
+    uFroth: [0, 0, 0, 0], uDecay: [decay, 0, 0], uDiffuse: perFrame(diffuse, dt), uDiffuseG: perFrame(0.02, dt), uCap: cap, uSrcGain: srcGain,
   }); dye.swap();
   if (pouring) {
     state.pour -= dt;
@@ -535,6 +543,8 @@ function stepPhysics(dt) {
   probe.request(probeT);
   rod.fluid = [probeBuf[512], probeBuf[513]];
 
+  // the swirl carries the waves around (Doppler shift m*Omega)
+  { let Lm = 0, I = 0; for (let i = 0; i < 128; i++) { const r = (i + 0.5) / 128 * D.R_IN; Lm += probeBuf[i * 4] * r * r; I += r * r * r; } modal.rotate(Lm / I, dt); }
   // radial profiles: waves + vortex dip + meniscus
   modal.fillProfiles(profiles);
   let acc = 0; swirlEta[0] = 0;
@@ -548,13 +558,18 @@ function stepPhysics(dt) {
     const eta = (swirlEta[i] * (1 - t) + swirlEta[i + 1] * t - mean) * 1000;
     const ub = probeBuf[Math.min(127, Math.max(0, Math.round(f - 0.5))) * 4];
     const e = Math.exp(-(D.R_IN - r) / men.lc);
-    profiles[ir * 4] += eta + men.h * e;
-    profiles[ir * 4 + 2] += (r > 1e-4 ? (ub * ub) / (g * r) : 0) + men.h * 0.001 * e / men.lc;
+    profiles[ir * 4 + 1] = eta + men.h * e;
+    profiles[ir * 4 + 3] = (r > 1e-4 ? (ub * ub) / (g * r) : 0) + men.h * 0.001 * e / men.lc;
   }
+  // steep waves break (short ones first); only a slosh over the rim spills
+  modal.breakWaves(dt);
   const wall = modal.wallHeights(profiles, 64, new Float32Array(64));
-  let maxH = 0; for (const x of wall) maxH = Math.max(maxH, Math.abs(x - men.h));
-  const room = Math.max(4, (D.INNER_TOP - state.fill) * 1000 * 0.8);
+  let maxH = 0; for (const x of wall) maxH = Math.max(maxH, Math.abs(x));
+  const room = Math.max(4, (D.INNER_TOP - state.fill) * 1000 - men.h);
   if (maxH > room) { const s = Math.sqrt(room / maxH); for (let i = 0; i < modal.n; i++) { modal.a[i] *= s; modal.v[i] *= s; } }
+  const spec = modal.spectrum();
+  stokes.k = Math.min(spec.kMean, 0.3 / Math.max(Math.sqrt(spec.meanH2), 1e-6));
+  stokes.h2 = spec.meanH2 * 1e6;
   gl.bindTexture(gl.TEXTURE_2D, profTex);
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Nr, M + 1, gl.RGBA, gl.FLOAT, profiles);
 }
@@ -609,7 +624,7 @@ function render() {
   };
 
   gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
-  pass(P.height, heightT, { uProfiles: profTex, uM: { int: M }, uNr: Nr, uSpike: state.spike, uSpikeK: 1 / men.lc });
+  pass(P.height, heightT, { uProfiles: profTex, uM: { int: M }, uNr: Nr, uSpike: state.spike, uSpikeK: 1 / men.lc, uK2: liq.metal ? 0 : stokes.k, uMeanH2: stokes.h2 });
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, msaa.fbo);
   gl.viewport(0, 0, W, H);

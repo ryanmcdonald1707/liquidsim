@@ -2,6 +2,7 @@ import { ModalSurface } from './modal.js';
 import * as G from './gl.js';
 import * as geo from './geometry.js';
 import * as S from './shaders.js';
+import { createMultigrid } from './multigrid.js';
 
 const { mat4 } = G;
 
@@ -108,6 +109,9 @@ const P = {
   force: G.program(gl, vs(S.fsVS), fs(S.forceFS)),
   div: G.program(gl, vs(S.fsVS), fs(S.divFS)),
   jacobi: G.program(gl, vs(S.fsVS), fs(S.jacobiFS)),
+  residual: G.program(gl, vs(S.fsVS), fs(S.residualFS)),
+  restrict: G.program(gl, vs(S.fsVS), fs(S.restrictFS)),
+  prolong: G.program(gl, vs(S.fsVS), fs(S.prolongFS)),
   grad: G.program(gl, vs(S.fsVS), fs(S.gradFS)),
   advectDye: G.program(gl, vs(S.fsVS), fs(S.advectDyeFS)),
   maccormack: G.program(gl, vs(S.fsVS), fs(S.maccormackFS)),
@@ -195,6 +199,9 @@ function pass(prog, dst, uniforms) {
   G.use(gl, prog, uniforms);
   meshes.quad.draw();
 }
+const mg = createMultigrid(gl, VRES, P, pass);
+// a blend weight defined per 1/60 s frame, converted to this step's dt
+const perFrame = (w, dt) => 1 - Math.pow(1 - w, dt * 60);
 
 // ---------------------------------------------------------------------------
 // Interaction & simulation state
@@ -204,7 +211,8 @@ const spoon = {
   active: false, auto: 0, pos: [0.0, 0.0], vel: [0, 0], blend: 0, faceVec: [1, 0],
   goal: [0, 0], fluid: [0, 0],
 };
-const events = { pour: 0, pourPos: [0, 0], milkBase: 0, milkTarget: 0, spawn: null };
+const events = { pour: 0, pourPos: [0, 0], milkBase: 0, milkTarget: 0, spawn: null, spill: 0, spillAng: 0 };
+const stokes = { k: 0, h2: 0 };
 let steamOn = true;
 let simTime = 0;
 const wet = { top: new Float32Array(128).fill(D.MEN_H), g: new Float32Array(128), heights: new Float32Array(128) };
@@ -325,7 +333,7 @@ function reset() {
   }
   gl.bindTexture(gl.TEXTURE_2D, bub.read.tex);
   gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, BW, BH, gl.RGBA, gl.FLOAT, initialBubbles());
-  events.milkBase = events.milkTarget = 0; events.pour = 0;
+  events.milkBase = events.milkTarget = 0; events.pour = 0; events.spill = 0;
   cup.target = [0, 0];
   wet.top.fill(D.MEN_H); wet.g.fill(0);
 }
@@ -416,7 +424,7 @@ function stepPhysics(dt) {
     uSpoon: [spoon.pos[0], spoon.pos[1], 0.0055, spoon.blend > 0.8 ? 1 : 0], uSpoonVel: spoon.vel,
   }); vel.swap();
   pass(P.div, divT, { uVel: vel.read.tex, uDye: dye.read.tex, uTexel: vt });
-  for (let i = 0; i < 36; i++) { pass(P.jacobi, pres.write, { uP: pres.read.tex, uDiv: divT.tex, uTexel: vt }); pres.swap(); }
+  mg.solve(pres, divT);
   pass(P.grad, vel.write, { uVel: vel.read.tex, uP: pres.read.tex, uDt: dt, uTexel: vt }); vel.swap();
 
   // dye: MacCormack advection
@@ -428,7 +436,7 @@ function stepPhysics(dt) {
     uVel: vel.read.tex, uOrig: dye.read.tex, uFwd: dyeF.tex, uBwd: dyeB.tex, uDt: dt, uTime: simTime, uTexel: dtx,
     uPour: pouring ? [events.pourPos[0], events.pourPos[1], 0.0045, 2.2 * Math.min(1, events.pour)] : [0, 0, 0, 0],
     uFroth: spoon.blend > 0.8 && stirSpeed > 0.15 ? [spoon.pos[0], spoon.pos[1], 0.004, (stirSpeed - 0.15) * 3] : [0, 0, 0, 0],
-    uDecay: [1 / 16, 1 / 45, 0], uDiffuse: 0.22, uDiffuseG: 0.22, uCap: 0.32, uSrcGain: 1, uFoamFromPour: 1,
+    uDecay: [1 / 16, 1 / 45, 0], uDiffuse: perFrame(0.22, dt), uDiffuseG: perFrame(0.22, dt), uCap: 0.32, uSrcGain: 1, uFoamFromPour: 1,
   }); dye.swap();
   if (pouring) {
     events.pour -= dt;
@@ -448,7 +456,15 @@ function stepPhysics(dt) {
   probe.request(probeT);
   spoon.fluid = [probeBuf[128 * 4], probeBuf[128 * 4 + 1]];
 
+  modal.rotate(swirlRate(), dt);
   buildProfiles(dt);
+}
+// effective solid-body rotation rate of the swirl: angular momentum over
+// moment of inertia, from the azimuthally averaged u_theta(r)
+function swirlRate() {
+  let L = 0, I = 0;
+  for (let i = 0; i < 128; i++) { const r = (i + 0.5) / 128 * D.R_IN; L += probeBuf[i * 4] * r * r; I += r * r * r; }
+  return L / I;
 }
 
 // Combine modal waves, the static meniscus and the vortex dip into the
@@ -476,14 +492,32 @@ function buildProfiles(dt) {
     const slope = r > 1e-4 ? (ub * ub) / (9.81 * r) : 0;
     const men = Math.exp(-(D.R_IN - r) / D.MEN_L);
     const o = ir * 4;
-    profiles[o] += eta + D.MEN_H * men;
-    profiles[o + 2] += slope + D.MEN_H * 0.001 * men / D.MEN_L;
+    // static part (meniscus + vortex dip) goes in the m = 0 sine channel,
+    // kept apart from the waves so the Stokes correction only bends waves
+    profiles[o + 1] = eta + D.MEN_H * men;
+    profiles[o + 3] = slope + D.MEN_H * 0.001 * men / D.MEN_L;
   }
-  // wave amplitude limiter (a real cup would spill / break the waves)
+  // steep waves break; a slosh that overtops the rim spills
+  const brk = modal.breakWaves(dt);
+  if (brk > 0.3) events.spawn = events.spawn || [(Math.random() - 0.5) * 0.04, (Math.random() - 0.5) * 0.04, 0.012, 0.003];
   modal.wallHeights(profiles, 128, wet.heights);
-  let maxH = 0;
-  for (let i = 0; i < 128; i++) maxH = Math.max(maxH, Math.abs(wet.heights[i] - D.MEN_H));
-  if (maxH > 9) { const s = Math.pow(9 / maxH, 0.5); for (let i = 0; i < modal.n; i++) { modal.a[i] *= s; modal.v[i] *= s; } }
+  const staticWall = profiles[(Nr - 1) * 4 + 1];
+  const clearance = (D.INNER_TOP - D.SURF_Y) * 1000 - D.MEN_H;
+  let maxH = 0, maxI = 0;
+  for (let i = 0; i < 128; i++) { if (Math.abs(wet.heights[i]) > maxH) { maxH = Math.abs(wet.heights[i]); maxI = i; } wet.heights[i] += staticWall; }
+  if (maxH > clearance) {
+    // the crest runs over the rim: that water leaves the cup
+    const excess = maxH - clearance;
+    const f = Math.pow(clearance / maxH, 0.5);
+    for (let i = 0; i < modal.n; i++) { modal.a[i] *= f; modal.v[i] *= f; }
+    // the stain stays where it first went over
+    if (events.spill < 0.02) events.spillAng = 2 * Math.PI * maxI / 128;
+    events.spill = Math.min(1, events.spill + excess * 0.03);
+  }
+  const sp = modal.spectrum();
+  // bound second-order waves; keep the correction modest where steepness is low
+  stokes.k = Math.min(sp.kMean, 0.3 / Math.max(Math.sqrt(sp.meanH2), 1e-6));
+  stokes.h2 = sp.meanH2 * 1e6;
   for (let i = 0; i < 128; i++) {
     const hgt = wet.heights[i];
     if (hgt >= wet.top[i] - 0.05) { wet.top[i] = hgt; wet.g[i] = 1; }
@@ -550,11 +584,11 @@ const handleM = rotY(-0.55);
 
 function render() {
   camM = cameraMatrices();
-  const common = { uCupPos: cup.pos, uTime: simTime, uWet: wetTex, uCamPos: camM.eye, uViewProj: camM.vp };
+  const common = { uCupPos: cup.pos, uTime: simTime, uWet: wetTex, uCamPos: camM.eye, uViewProj: camM.vp, uSpill: events.spill, uSpillAng: events.spillAng };
 
   // mode sum -> height field
   gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
-  pass(P.height, heightT, { uProfiles: profTex, uM: { int: M }, uNr: Nr });
+  pass(P.height, heightT, { uProfiles: profTex, uM: { int: M }, uNr: Nr, uK2: stokes.k, uMeanH2: stokes.h2 });
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, msaa.fbo);
   gl.viewport(0, 0, W, H);
