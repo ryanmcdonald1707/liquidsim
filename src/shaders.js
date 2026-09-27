@@ -911,8 +911,11 @@ void main() {
   vec3 c = vec3(0.0);
   for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) c += texture(uSrc, vUv + vec2(x, y) * uTexel).rgb;
   c /= 9.0;
+  // never let a stray NaN/Inf pixel get smeared into blocks by the blur
+  if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
+  c = min(c, vec3(1e4));
   float l = max(max(c.r, c.g), c.b);
-  o = vec4(c * smoothstep(1.2, 4.0, l), 1.0);
+  o = vec4(c * smoothstep(2.5, 8.0, l), 1.0);
 }
 `;
 export const blurFS = /* glsl */ `
@@ -943,7 +946,10 @@ vec3 aces(vec3 x) {
 }
 void main() {
   vec3 c = texture(uHdr, vUv).rgb;
-  c += texture(uBloom1, vUv).rgb * 0.05 + texture(uBloom2, vUv).rgb * 0.07;
+  if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
+  vec3 bl = texture(uBloom1, vUv).rgb * 0.05 + texture(uBloom2, vUv).rgb * 0.07;
+  if (any(isnan(bl)) || any(isinf(bl))) bl = vec3(0.0);
+  c += bl;
   c *= uExposure;
   vec2 d = vUv - 0.5;
   c *= 1.0 - 0.35 * dot(d, d) * 2.0;

@@ -67,7 +67,8 @@ vec3 liquidTrans(vec3 p) {
   // the shadow of clear liquids
   float s = abs(dot(vec2(-d.y, d.x) / sqrt(a), p.xz)) / R_IN;
   float clear = exp(-dot(ss, vec3(0.33)) * 0.01);
-  T *= 1.0 + clear * (1.8 * exp(-pow((s - 0.72) / 0.07, 2.0)) - 0.35 * smoothstep(0.9, 0.2, s));
+  float cs = (s - 0.72) / 0.07; // (pow() of a negative base is undefined in GLSL)
+  T *= 1.0 + clear * (1.8 * exp(-cs * cs) - 0.35 * smoothstep(0.9, 0.2, s));
   return T;
 }
 
@@ -192,17 +193,20 @@ void main() {
   vec3 N = surfN(vLocal.xz);
   vec3 V = normalize(uCamPos - vWorld);
   vec3 p = vLocal;
+  // the mesh overlaps the glass by a hair to hide the seam; march from inside
+  float pr = length(p.xz);
+  if (pr > R_IN * 0.998) p.xz *= R_IN * 0.998 / pr;
   vec3 R = reflect(-V, N);
   if (uMetal > 0.5) {
     vec3 F = uF0 + (1.0 - uF0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);
     o = vec4(sceneRay(p, R) * F, 1.0);
     return;
   }
-  float f0 = pow((uIor - 1.0) / (uIor + 1.0), 2.0);
+  float fr = (uIor - 1.0) / (uIor + 1.0), f0 = fr * fr;
   float F = fresnel(dot(N, V), f0);
   vec3 refl = sceneRay(p, R);
   vec3 body = marchLiquid(p - N * 1e-5, refract(-V, N, 1.0 / uIor), hash12(gl_FragCoord.xy + fract(uTime) * 61.0));
-  o = vec4(refl * F + body * (1.0 - F), 1.0);
+  o = vec4(min(refl * F + body * (1.0 - F), vec3(40.0)), 1.0);
 }
 `;
 
@@ -233,7 +237,7 @@ void main() {
     return;
   }
   vec3 d = refract(rd, n, 1.0 / uIor);
-  o = vec4(marchLiquid(e + d * 1e-5, d, hash12(gl_FragCoord.xy + fract(uTime) * 61.0)) * 0.95, 1.0);
+  o = vec4(min(marchLiquid(e + d * 1e-5, d, hash12(gl_FragCoord.xy + fract(uTime) * 61.0)) * 0.95, vec3(40.0)), 1.0);
 }
 `;
 
