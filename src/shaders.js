@@ -39,6 +39,49 @@ vec3 env(vec3 d, float blur) {
   vec3 col = mix(vec3(0.055, 0.045, 0.038), vec3(0.19, 0.16, 0.13), smoothstep(-0.3, 0.1, d.y));
   col = mix(col, vec3(0.24, 0.225, 0.21), smoothstep(0.7, 0.98, d.y));
   col *= 0.8 + 0.4 * smoothstep(-1.0, 1.0, cos(az)); // wall facing the window is lit
+#ifdef LAB_ENV
+  {
+    // a lab: tiled splash-back, base cabinets and shelves of reagent bottles
+    float det = 1.0 - smoothstep(0.02, 0.2, blur);
+    float lit = 0.8 + 0.4 * smoothstep(-1.0, 1.0, cos(az));
+    float daz = atan(d.x, -d.z);
+    if (el > 0.0 && el < 0.26) {
+      float door = fract(daz * 2.2);
+      vec3 cab = vec3(0.34, 0.36, 0.38) * (0.9 + 0.1 * vnoise(vec2(daz * 40.0, el * 20.0)));
+      cab *= mix(1.0, 0.35, (1.0 - smoothstep(0.0, 0.015 + blur, abs(door - 0.5) - 0.48)) * det);
+      cab = mix(cab, vec3(0.75), (1.0 - smoothstep(0.004, 0.01 + blur, length(vec2((abs(door - 0.5) - 0.42) * 0.3, el - 0.21)))) * det);
+      col = cab * lit;
+    } else if (el >= 0.26 && el < 0.5) {
+      vec2 t = vec2(daz * 16.0, el * 16.0);
+      float grout = max(1.0 - smoothstep(0.0, 0.05 + blur * 4.0, abs(fract(t.x) - 0.5) - 0.45), 1.0 - smoothstep(0.0, 0.05 + blur * 4.0, abs(fract(t.y) - 0.5) - 0.45));
+      col = mix(vec3(0.72, 0.74, 0.74), vec3(0.45, 0.46, 0.46), grout * det) * 0.55 * lit;
+      // shelf of bottles
+      float shelf = 1.0 - smoothstep(0.0, 0.006 + blur, abs(el - 0.34));
+      float cell = floor(daz * 9.0), fx = fract(daz * 9.0);
+      float hgt = 0.05 + 0.07 * hash12(vec2(cell, 3.0));
+      float wdt = 0.18 + 0.15 * hash12(vec2(cell, 5.0));
+      float inB = (1.0 - smoothstep(wdt - 0.03 - blur, wdt + blur, abs(fx - 0.5))) * step(0.34, el) * (1.0 - smoothstep(0.34 + hgt - blur, 0.34 + hgt + 0.004 + blur, el));
+      float hue = hash12(vec2(cell, 7.0));
+      vec3 glassCol = hue < 0.3 ? vec3(0.45, 0.24, 0.06) : hue < 0.55 ? vec3(0.12, 0.26, 0.5) : hue < 0.75 ? vec3(0.16, 0.4, 0.2) : vec3(0.8, 0.8, 0.78);
+      col = mix(col, glassCol * (0.5 + 0.3 * fx) * lit, inB * step(0.2, hash12(vec2(cell, 11.0))));
+      col = mix(col, vec3(0.9, 0.88, 0.84) * 0.6 * lit, shelf);
+    } else if (el >= 0.56 && el < 1.0) {
+      // wall cabinets with glass-panel doors
+      float door = fract(daz * 3.0);
+      float frame = 1.0 - smoothstep(0.0, 0.01 + blur, min(abs(door - 0.5) - 0.4, 0.0) + min(abs(el - 0.78) - 0.18, 0.0) + 0.02);
+      float edge = (1.0 - smoothstep(0.0, 0.012 + blur, abs(abs(door - 0.5) - 0.5))) + (1.0 - smoothstep(0.0, 0.012 + blur, abs(el - 0.565)));
+      vec3 wood = vec3(0.5, 0.36, 0.22) * (0.85 + 0.15 * vnoise(vec2(daz * 30.0, el * 200.0)));
+      float cell = floor(daz * 14.0), fx = fract(daz * 14.0);
+      float row = el < 0.78 ? 0.62 : 0.8;
+      float hgt = 0.05 + 0.08 * hash12(vec2(cell, row * 10.0));
+      float inB = (1.0 - smoothstep(0.25 - blur, 0.3 + blur, abs(fx - 0.5))) * step(row, el) * (1.0 - smoothstep(row + hgt - blur, row + hgt + blur, el));
+      float hue = hash12(vec2(cell, row * 20.0));
+      vec3 inside = mix(vec3(0.1, 0.1, 0.11), hue < 0.5 ? vec3(0.5, 0.3, 0.1) : hue < 0.8 ? vec3(0.2, 0.3, 0.5) : vec3(0.85), inB * 0.8);
+      col = mix(wood, inside, frame * det) * lit * 0.9;
+      col *= 1.0 - 0.6 * min(edge, 1.0) * det;
+    }
+  }
+#endif
   float w = 0.006 + blur;
   float el0 = WIN_EL0, el1 = WIN_EL1, aw = WIN_AW;
   float fx = smoothstep(-aw - 0.05 - w, -aw - 0.05 + w, az) * (1.0 - smoothstep(aw + 0.05 - w, aw + 0.05 + w, az));
@@ -439,7 +482,7 @@ float inside(vec2 uv) { return step(length(toQ(uv)), R_IN); }
 
 export const advectVelFS = flowCommon + /* glsl */ `
 uniform sampler2D uVel;
-uniform float uDt, uDamp;
+uniform float uDt, uDamp, uVisc; // uVisc: implicit-ish viscous smoothing weight
 void main() {
   vec2 q = toQ(vUv);
   if (length(q) > R_IN) { o = vec4(0.0); return; }
@@ -450,7 +493,14 @@ void main() {
   float h = 2.0 * R_IN * uTexel.x;
   float lb = length(back);
   if (lb > R_IN - 1.5 * h) back *= (R_IN - 1.5 * h) / lb;
-  o = vec4(texture(uVel, toUv(back)).xy * uDamp, 0.0, 1.0);
+  vec2 bu = toUv(back);
+  vec2 v = texture(uVel, bu).xy;
+  if (uVisc > 0.0) {
+    vec2 nb = texture(uVel, bu + vec2(uTexel.x, 0)).xy + texture(uVel, bu - vec2(uTexel.x, 0)).xy
+            + texture(uVel, bu + vec2(0, uTexel.y)).xy + texture(uVel, bu - vec2(0, uTexel.y)).xy;
+    v = mix(v, nb * 0.25, uVisc);
+  }
+  o = vec4(v * uDamp, 0.0, 1.0);
 }
 `;
 
@@ -577,6 +627,7 @@ uniform float uDt;
 uniform vec4 uPour;     // x, z, radius, rate
 uniform vec4 uFroth;    // x, z, radius, rate
 uniform vec3 uDecay;    // per-second decay for milk, froth, source
+uniform float uDiffuse, uSharpen, uCap, uSrcGain;
 void main() {
   vec2 q = toQ(vUv);
   if (length(q) > R_IN) { o = vec4(0.0); return; }
@@ -591,7 +642,9 @@ void main() {
   res = clamp(res, min(min(a, b), min(c, d)), max(max(a, b), max(c, d)));
   // molecular + sub-grid turbulent diffusion
   vec4 nb = texture(uFwd, vUv + vec2(ts.x, 0)) + texture(uFwd, vUv - vec2(ts.x, 0)) + texture(uFwd, vUv + vec2(0, ts.y)) + texture(uFwd, vUv - vec2(0, ts.y));
-  res = mix(res, nb * 0.25, 0.22);
+  res = mix(res, nb * 0.25, uDiffuse);
+  // immiscible liquids: surface tension pulls the dye into sharp-edged lenses
+  if (uSharpen > 0.0) res.r += (smoothstep(0.3, 0.6, res.r / uCap) * uCap - res.r) * min(1.0, uDt * uSharpen);
   res.rgb *= exp(-uDt * uDecay);
   res.a *= exp(-uDt * 1.4);
   if (uPour.w > 0.0) {
@@ -599,7 +652,7 @@ void main() {
     float k = exp(-dd * dd / (uPour.z * uPour.z));
     float n = vnoise(q * 140.0 + uTime * 1.5) * 0.7 + vnoise(q * 400.0 - uTime) * 0.3;
     res.r += uDt * uPour.w * k * (0.3 + 1.2 * n) * 0.6;
-    res.a += uDt * uPour.w * k * 2.6;
+    res.a += uDt * uPour.w * k * 2.6 * uSrcGain;
     res.g += uDt * uPour.w * k * 0.05 * smoothstep(0.6, 0.9, vnoise(q * 1200.0 + uTime * 5.0));
   }
   if (uFroth.w > 0.0) {
@@ -607,7 +660,7 @@ void main() {
     float k = exp(-dd * dd / (uFroth.z * uFroth.z));
     res.g += uDt * uFroth.w * k * smoothstep(0.5, 0.9, vnoise(q * 1500.0 + uTime * 10.0));
   }
-  res.r = min(res.r, 0.32); res.g = min(res.g, 1.0);
+  res.r = min(res.r, uCap); res.g = min(res.g, 1.0);
   o = res;
 }
 `;

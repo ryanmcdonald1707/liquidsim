@@ -54,6 +54,7 @@ export class ModalSurface {
     this.Nr = opts.Nr ?? 256;          // radial samples for the GPU profile
     this.dt = opts.dt ?? 1 / 240;      // fixed substep
     this.contactDamping = opts.contactDamping ?? 0.22; // 1/s, contact-line losses
+    this.extraDamping = opts.extraDamping ?? 0;      // 1/s per unit k, e.g. an oil film
     this.build();
   }
 
@@ -118,8 +119,6 @@ export class ModalSurface {
     this.accelProj = new Float64Array(n);
     this.a = new Float64Array(n);
     this.v = new Float64Array(n);
-    this.pc = new Float64Array(n); this.ps = new Float64Array(n);
-    this.pe = new Float64Array(n); this.pwd = new Float64Array(n);
 
     const shapeCache = new Map();
     for (let i = 0; i < n; i++) {
@@ -135,7 +134,7 @@ export class ModalSurface {
       const gFilm = k * Math.sqrt(nu * w / 8);
       const gWall = (Math.sqrt(nu * w / 2) / R) * 0.5 * (1 + mx) / (1 - mx);
       const gBottom = k * Math.sqrt(nu * w / 2) / Math.sinh(Math.min(2 * k * H, 50));
-      const gam = gBulk + gFilm + gWall + gBottom + this.contactDamping;
+      const gam = gBulk + gFilm + gWall + gBottom + this.contactDamping + this.extraDamping * k * R;
       this.mOrd[i] = m; this.isSin[i] = sin; this.k[i] = k;
       this.omega[i] = w; this.gamma[i] = gam; this.couple[i] = k * th;
 
@@ -173,36 +172,52 @@ export class ModalSurface {
   }
 
   setStep(dt) {
+    // Exact 2x2 propagator of x'' + 2 gamma x' + omega^2 x = 0 over dt, for
+    // both under-damped (waves) and over-damped (e.g. honey) modes.
     this.dt = dt;
-    for (let i = 0; i < this.n; i++) {
-      const w = this.omega[i], g = this.gamma[i];
-      const wd = Math.sqrt(Math.max(w * w - g * g, 1e-9));
-      this.pe[i] = Math.exp(-g * dt);
-      this.pc[i] = Math.cos(wd * dt);
-      this.ps[i] = Math.sin(wd * dt);
-      this.pwd[i] = wd;
+    const n = this.n;
+    this.m11 = new Float64Array(n); this.m12 = new Float64Array(n);
+    this.m21 = new Float64Array(n); this.m22 = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const w = this.omega[i], g = this.gamma[i], w2 = w * w;
+      if (w > g * 1.0001) {
+        const wd = Math.sqrt(w2 - g * g), e = Math.exp(-g * dt), c = Math.cos(wd * dt), s = Math.sin(wd * dt);
+        this.m11[i] = e * (c + (g / wd) * s); this.m12[i] = e * s / wd;
+        this.m21[i] = -e * (w2 / wd) * s; this.m22[i] = e * (c - (g / wd) * s);
+      } else {
+        const b = Math.max(Math.sqrt(Math.max(g * g - w2, 0)), 1e-3 * g);
+        const l1 = -g + b, l2 = -g - b, E1 = Math.exp(l1 * dt), E2 = Math.exp(l2 * dt), d = l1 - l2;
+        this.m11[i] = (-l2 * E1 + l1 * E2) / d; this.m12[i] = (E1 - E2) / d;
+        this.m21[i] = l1 * l2 * (E2 - E1) / d; this.m22[i] = (l1 * E1 - l2 * E2) / d;
+      }
     }
   }
 
   reset() { this.a.fill(0); this.v.fill(0); }
 
   // Advance by one fixed substep with the cup accelerating at (ax, az) m/s^2
-  // (horizontal, in the cup's x/z plane) and vertical accel ay.
+  // (horizontal, in the cup's x/z plane).
   substep(ax, az) {
-    const { n, a, v, pe, pc, ps, pwd, omega, gamma, couple, accelProj, mOrd, isSin } = this;
+    const { n, a, v, m11, m12, m21, m22, omega, couple, accelProj, mOrd, isSin } = this;
     for (let i = 0; i < n; i++) {
-      const w2 = omega[i] * omega[i], g = gamma[i];
       let eq = 0;
       if (mOrd[i] === 1) {
         // In the cup frame the fictitious force derives from Phi = a.x.
         const P = (isSin[i] ? az : ax) * accelProj[i];
-        eq = -couple[i] * P / w2;
+        eq = -couple[i] * P / (omega[i] * omega[i]);
       }
       const x0 = a[i] - eq, v0 = v[i];
-      const e = pe[i], c = pc[i], s = ps[i], wd = pwd[i];
-      a[i] = e * (x0 * c + (v0 + g * x0) / wd * s) + eq;
-      v[i] = e * (v0 * c - (w2 * x0 + g * v0) / wd * s);
+      a[i] = m11[i] * x0 + m12[i] * v0 + eq;
+      v[i] = m21[i] * x0 + m22[i] * v0;
     }
+  }
+
+  // Slowest decay rate of the fundamental slosh mode (1/s) and its frequency (Hz).
+  sloshInfo() {
+    const i = this.mOrd.indexOf(1);
+    const w = this.omega[i], g = this.gamma[i];
+    if (w > g) return { hz: Math.sqrt(w * w - g * g) / (2 * Math.PI), decay: g, over: false };
+    return { hz: 0, decay: g - Math.sqrt(g * g - w * w), over: true };
   }
 
   // Evaluate a mode's radial profile and derivative at radius r.

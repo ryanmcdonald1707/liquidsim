@@ -10,6 +10,11 @@ npx http-server .     # or: python3 -m http.server
 
 Requires WebGL2 with `EXT_color_buffer_float`, which any recent desktop or mobile browser has.
 
+The page has two tabs:
+
+- **Café** (`index.html`): a cup of coffee on a wooden table.
+- **Lab** (`lab.html`): a glass beaker for testing different liquids — see [The lab](#the-lab).
+
 ## Controls
 
 | Action | Input |
@@ -59,8 +64,41 @@ The azimuthally averaged swirl is read back and integrated as `dη/dr = u_θ²/(
 - **Post-processing:** HDR rendering with 4× MSAA, bloom, an ACES filmic tone map, vignette and grain.
 - **Performance:** resolution adapts automatically on slower GPUs.
 
+## The lab
+
+A 400 ml borosilicate beaker on a lab bench. Pick a base liquid and something to pour in, then stir, drop, knock or slosh it.
+
+**Base liquids, each with its real density, viscosity, surface tension, refractive index, contact angle and absorption and scattering spectra:**
+water, black coffee, black tea, whole milk, red wine, olive oil, honey, orange juice, and mercury.
+
+The wave solver is rebuilt for each liquid, so they genuinely behave differently:
+- **Water:** long-lived ripples.
+- **Honey:** every mode is over-damped (the propagator handles this exactly), so the surface creeps instead of rippling.
+- **Mercury:** a liquid-metal mirror with 7× water's surface tension. It has a convex meniscus because it doesn't wet glass.
+
+The **gravity** slider (Moon to Jupiter) and **fill** slider rebuild the modes too. The **Physics** panel shows the numbers that follow from the physics: capillary length, meniscus height, slowest ripple speed, Bond number, and slosh frequency and decay.
+
+**Additives:** milk, cream, blue and red food dye, ink, espresso, honey, and olive oil.
+- Miscible ones plume down in billowing tendrils and slowly mix into the bulk.
+- Honey sinks as a falling stream and pools at the bottom until you stir it in.
+- Oil floats as an immiscible layer that keeps sharp edges and calms the ripples.
+
+Switching additive keeps whatever is already mixed in.
+
+**Rendering:** because the beaker is glass, the liquid is rendered volumetrically by ray marching through it. This gives:
+- Beer–Lambert absorption plus a Kubelka–Munk multiple-scattering source term
+- refraction at every interface
+- the silvery total-internal-reflection band at the bottom
+- an inverted, lens-distorted view of the room through the liquid
+- a stirring rod that looks bent where it enters the liquid
+- a coloured shadow and cylindrical-lens caustic on the gridded bench mat
+
 ## Screenshots
 
 | Stirring | Milk | Droplet |
 | --- | --- | --- |
 | ![stirring](docs/stir.png) | ![milk](docs/milk.png) | ![droplet](docs/drop.png) |
+
+| Lab: red dye in water | Lab: stirring honey | Lab: mercury |
+| --- | --- | --- |
+| ![dye](docs/lab-dye.png) | ![honey](docs/lab-honey.png) | ![mercury](docs/lab-mercury.png) |

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Liquid Lab</title>
+<link rel="stylesheet" href="src/ui.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="status">Solving for the Bessel modes of the beaker…</div>
+<nav class="tabs"><a href="index.html">Café</a><a href="lab.html" class="on">Lab</a></nav>
+
+<aside class="panel left">
+  <h2>Liquid</h2>
+  <div id="liquids" class="chips"></div>
+  <h2>Pour in</h2>
+  <div id="additives" class="chips"></div>
+  <h2>Fill <span id="fill-v" class="val"></span></h2>
+  <input id="fill" type="range" min="100" max="450" step="5" value="355">
+  <h2>Gravity <span id="g-v" class="val">1.00 g</span></h2>
+  <input id="gravity" type="range" min="-1" max="0.5" step="0.01" value="0">
+  <div class="presets">
+    <button data-g="0.166">Moon</button><button data-g="0.378">Mars</button><button data-g="1">Earth</button><button data-g="2.53">Jupiter</button>
+  </div>
+</aside>
+
+<aside class="panel right">
+  <h2>Physics</h2>
+  <dl id="readout"></dl>
+  <p id="note"></p>
+</aside>
+
+<div id="fps"></div>
+<div class="ui">
+  <button id="b-stir">Stir<kbd>S</kbd></button>
+  <button id="b-pour">Pour<kbd>P</kbd></button>
+  <button id="b-drop">Drop<kbd>D</kbd></button>
+  <button id="b-knock">Knock<kbd>K</kbd></button>
+  <button id="b-slosh">Slosh<kbd>←→</kbd></button>
+  <button id="b-reset">Fresh sample<kbd>R</kbd></button>
+</div>
+<script type="module" src="src/lab.js"></script>
+</body>
+</html>

@@ -428,7 +428,7 @@ function stepPhysics(dt) {
     uVel: vel.read.tex, uOrig: dye.read.tex, uFwd: dyeF.tex, uBwd: dyeB.tex, uDt: dt, uTime: simTime, uTexel: dtx,
     uPour: pouring ? [events.pourPos[0], events.pourPos[1], 0.0045, 2.2 * Math.min(1, events.pour)] : [0, 0, 0, 0],
     uFroth: spoon.blend > 0.8 && stirSpeed > 0.15 ? [spoon.pos[0], spoon.pos[1], 0.004, (stirSpeed - 0.15) * 3] : [0, 0, 0, 0],
-    uDecay: [1 / 16, 1 / 45, 0],
+    uDecay: [1 / 16, 1 / 45, 0], uDiffuse: 0.22, uSharpen: 0, uCap: 0.32, uSrcGain: 1,
   }); dye.swap();
   if (pouring) {
     events.pour -= dt;

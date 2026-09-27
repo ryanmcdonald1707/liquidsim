@@ -1,0 +1,56 @@
+:root { --fg: #f3ece4; --muted: #b9ada1; --panel: rgba(20, 16, 14, 0.58); --line: rgba(255, 240, 225, 0.14); --accent: #f0b46a; }
+html, body { margin: 0; height: 100%; background: #0d0907; color: var(--fg); overflow: hidden;
+  font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+#c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+#c:active { cursor: grabbing; }
+button { font: inherit; color: var(--fg); }
+.blur { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+
+.tabs { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 999px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 5; }
+.tabs a { color: var(--muted); text-decoration: none; padding: 6px 16px; border-radius: 999px; }
+.tabs a:hover { color: var(--fg); }
+.tabs a.on { color: #1b120c; background: var(--fg); }
+
+.ui { position: fixed; left: 16px; bottom: 16px; right: 16px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; pointer-events: none; }
+.ui button { pointer-events: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+  padding: 8px 14px; cursor: pointer; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.ui button:hover { border-color: rgba(255, 240, 225, 0.35); }
+.ui button.off { opacity: 0.5; }
+.ui kbd { font: 11px ui-monospace, monospace; color: var(--muted); margin-left: 6px; }
+
+.panel { position: fixed; top: 64px; width: 230px; max-height: calc(100% - 140px); overflow: auto; padding: 12px 14px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.panel.left { left: 16px; }
+.panel.right { right: 16px; }
+.panel h2 { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 12px 0 8px; display: flex; justify-content: space-between; }
+.panel h2:first-child { margin-top: 0; }
+.panel .val { text-transform: none; letter-spacing: 0; color: var(--fg); font-weight: 400; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px 5px 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line); cursor: pointer; font-size: 12px; }
+.chip i { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25); }
+.chip.on { border-color: var(--accent); background: rgba(240, 180, 106, 0.14); }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.presets { display: flex; gap: 4px; margin-top: 6px; }
+.presets button { flex: 1; padding: 4px 0; font-size: 11px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+dl { display: grid; grid-template-columns: auto auto; gap: 5px 10px; margin: 0; font-size: 12px; }
+dt { color: var(--muted); }
+dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+#note { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
+
+.help { position: fixed; top: 64px; left: 16px; max-width: 340px; color: var(--muted); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.help b { color: var(--fg); font-weight: 600; }
+.help summary { cursor: pointer; color: var(--fg); list-style: none; }
+.help summary::-webkit-details-marker { display: none; }
+.help ul { margin: 8px 0 0; padding-left: 18px; }
+#fps { position: fixed; top: 20px; right: 16px; color: var(--muted); font: 11px ui-monospace, monospace; }
+#status { position: fixed; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 15px; }
+#status.err { color: #ffb4a0; }
+@media (max-width: 760px) {
+  .panel { top: auto; bottom: 64px; width: auto; max-height: 34vh; }
+  .panel.left { right: 16px; }
+  .panel.right { display: none; }
+  .help { right: 16px; max-width: none; }
+}
