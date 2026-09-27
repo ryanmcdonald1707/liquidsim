@@ -220,10 +220,9 @@ void main() {
   // the pour: pure additive enters with the stream (a ragged, breaking jet)
   if (uJet.w > 0.0) {
     float d = length(p.xz - uJet.xy), depth = SURF_Y - p.y;
-    float n = hash(floor(p * 900.0) + floor(uTime * 30.0));
     // it punches in as a blob just under the surface rather than loading the
     // surface layer (which would then feed a trailing column for ever)
-    float k = exp(-pow(d / uJet.z, 2.0) - pow((depth - 0.0015 - uJetZ * uJet.z) / (uJetZ * uJet.z), 2.0)) * (0.6 + 0.4 * n);
+    float k = exp(-pow(d / uJet.z, 2.0) - pow((depth - 0.0015 - uJetZ * uJet.z) / (uJetZ * uJet.z), 2.0));
     // a volumetric source: what enters is set by the pour, not by the flow
     res = min(1.0, res + uDt * uJet.w * k);
   }

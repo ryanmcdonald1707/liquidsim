@@ -139,18 +139,42 @@ vec3 steel(vec3 n, vec3 v, vec3 refl) {
   return F * refl;
 }
 
+// Kubelka-Munk reflectance of a layer of finite thickness X (black behind).
+// kmAlbedo assumes an infinitely deep medium: for weakly scattering mixtures
+// (a splash of milk in water) light would wander for metres and the water's
+// red absorption would tint it green. In a beaker it escapes within ~X.
+vec3 kmFinite(vec3 sa, vec3 ss, float X) {
+  vec3 S = max(ss * 0.5, vec3(1e-4));
+  vec3 a = 1.0 + sa / S, b = sqrt(max(a * a - 1.0, vec3(1e-8)));
+  vec3 bsx = min(b * S * X, vec3(20.0));
+  vec3 e = exp(-2.0 * bsx), coth = (1.0 + e) / max(1.0 - e, vec3(1e-6));
+  return 1.0 / (a + b * coth);
+}
+
 // Radiance scattered towards the viewer by a unit of liquid at q.
 vec3 inscatter(vec3 q, vec3 sa, vec3 ss) {
-  vec3 st = sa + ss;
-  vec3 seff = min(st, sqrt(3.0 * sa * st) + sa);
   // distances light travels through the liquid to reach q; measured to the
   // local (meniscus-raised) surface and never negative - a negative path
   // would turn attenuation into amplification
   float top = SURF_Y + surfH(q.xz);
   float tl = max(min(wallDist(q, LW), (top - q.y) / max(LW.y, 1e-3)), 0.0);
   float esc = max(min(R_IN - length(q.xz), top - q.y), 0.0);
-  vec3 lit = vec3(1.0, 0.97, 0.94) * WIN_E * 0.55 * exp(-seff * tl) + ambient(vec3(0.0, 1.0, 0.0)) * exp(-seff * esc);
-  return kmAlbedo(sa, ss) / PI * lit;
+  // the light reaching q crosses mostly *other* liquid on its way in: take the
+  // additive fraction along each path from the 3D field, not the medium at q
+  // (a milk cloud in water would otherwise be lit through centimetres of neat
+  // milk, and the milk's blue absorption plus the water's red absorption
+  // would turn it green)
+  vec3 lit = vec3(0.0);
+  for (int k = 0; k < 2; k++) {
+    vec3 dir = k == 0 ? LW : vec3(0.0, 1.0, 0.0);
+    float len = k == 0 ? tl : esc;
+    float c = 0.0;
+    if (uHasAdd > 0.5) for (int i = 0; i < 4; i++) c += sample3(uConc3, q + dir * len * (float(i) + 0.5) / 4.0, uGC).x * 0.25;
+    vec3 pa = mix(uSigA, uAddA, c), pt = pa + mix(uSigS, uAddS, c);
+    vec3 seff = min(pt, sqrt(3.0 * pa * pt) + pa);
+    lit += (k == 0 ? vec3(1.0, 0.97, 0.94) * WIN_E * 0.55 : ambient(vec3(0.0, 1.0, 0.0))) * exp(-seff * len);
+  }
+  return kmFinite(sa, ss, 1.5 * R_IN) / PI * lit;
 }
 
 // Gas bubbles rising in columns from nucleation sites (scratches on the
