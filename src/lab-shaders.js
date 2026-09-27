@@ -143,6 +143,7 @@ vec3 steel(vec3 n, vec3 v, vec3 refl) {
 // kmAlbedo assumes an infinitely deep medium: for weakly scattering mixtures
 // (a splash of milk in water) light would wander for metres and the water's
 // red absorption would tint it green. In a beaker it escapes within ~X.
+const float G_FWD = 0.85; // scattering anisotropy of colloidal particles
 vec3 kmFinite(vec3 sa, vec3 ss, float X) {
   vec3 S = max(ss * 0.5, vec3(1e-4));
   vec3 a = 1.0 + sa / S, b = sqrt(max(a * a - 1.0, vec3(1e-8)));
@@ -170,8 +171,11 @@ vec3 inscatter(vec3 q, vec3 sa, vec3 ss) {
     float len = k == 0 ? tl : esc;
     float c = 0.0;
     if (uHasAdd > 0.5) for (int i = 0; i < 4; i++) c += sample3(uConc3, q + dir * len * (float(i) + 0.5) / 4.0, uGC).x * 0.25;
-    vec3 pa = mix(uSigA, uAddA, c), pt = pa + mix(uSigS, uAddS, c);
-    vec3 seff = min(pt, sqrt(3.0 * pa * pt) + pa);
+    // diffusion with the reduced scattering coefficient: colloids like milk
+    // fat scatter strongly forwards (g ~ 0.85), so a scattering event barely
+    // lengthens the light's path
+    vec3 pa = mix(uSigA, uAddA, c), ps = mix(uSigS, uAddS, c);
+    vec3 seff = min(pa + ps, sqrt(3.0 * pa * (pa + ps * (1.0 - G_FWD))) + pa);
     lit += (k == 0 ? vec3(1.0, 0.97, 0.94) * WIN_E * 0.55 : ambient(vec3(0.0, 1.0, 0.0))) * exp(-seff * len);
   }
   return kmFinite(sa, ss, 1.5 * R_IN) / PI * lit;
