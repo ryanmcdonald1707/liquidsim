@@ -45,7 +45,7 @@ The azimuthally averaged swirl is read back and integrated as `dη/dr = u_θ²/(
 
 **Other effects**
 - A static capillary meniscus climbs the wall (capillary length ≈ 2.3 mm).
-- Floating bubbles are carried by the flow. They cluster against the wall (capillary attraction up the meniscus) and migrate into the eye of a vortex.
+- Floating bubbles are ray-traced thin-film domes (spherical caps) with a meniscus skirt at the foot. They are carried by the flow. They cluster against the wall (capillary attraction up the meniscus) and migrate into the eye of a vortex.
 - A wet film is left on the wall when the coffee sloshes. It drains, and a faint tide mark stays at the resting line.
 
 ## Rendering

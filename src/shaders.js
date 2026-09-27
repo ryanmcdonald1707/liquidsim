@@ -671,66 +671,92 @@ uniform mat4 uViewProj, uView;
 uniform sampler2D uState, uHeight, uDye;
 uniform float uMilkBase;
 in vec3 aPos;
-out vec2 vC; out vec3 vCenter; out float vRad; flat out float vAlive; out float vMilk;
+out vec3 vWorldPos, vCenter; out float vRad, vMilk; flat out float vAlive;
 void main() {
   int id = gl_InstanceID;
   vec4 s = texelFetch(uState, ivec2(id % 64, id / 64), 0);
   vAlive = step(0.0001, s.w) * step(1e-6, s.z);
-  float fade = clamp(s.w * 2.0, 0.0, 1.0);
-  float rad = s.z * fade;
-  float h = texture(uHeight, s.xy / (2.0 * R_IN) + 0.5).r * 0.001;
-  vMilk = clamp(texture(uDye, s.xy / (2.0 * R_IN) + 0.5).r + uMilkBase, 0.0, 1.0);
+  float rad = s.z * clamp(s.w * 2.0, 0.0, 1.0);
+  vec2 uv = s.xy / (2.0 * R_IN) + 0.5;
+  float h = texture(uHeight, uv).r * 0.001;
+  vMilk = clamp(texture(uDye, uv).r + uMilkBase, 0.0, 1.0);
   vec3 c = vec3(s.x, SURF_Y + h, s.y) + uCupPos;
   vec3 right = vec3(uView[0][0], uView[1][0], uView[2][0]);
   vec3 up = vec3(uView[0][1], uView[1][1], uView[2][1]);
-  float k = 1.45;
-  vec3 wp = c + (right * aPos.x + up * aPos.y) * rad * k;
-  vC = aPos.xy * k; vCenter = c; vRad = rad;
+  vec3 toCam = normalize(uCamPos - c);
+  // camera-facing quad pulled towards the viewer so the liquid never clips
+  // it; the dome itself is ray traced in the fragment shader
+  vec3 wp = c + toCam * rad * 2.0 + (right * aPos.x + up * aPos.y) * rad * 2.1;
+  vWorldPos = wp; vCenter = c; vRad = max(rad, 1e-6);
   gl_Position = vAlive > 0.5 ? uViewProj * vec4(wp, 1.0) : vec4(2.0, 2.0, 2.0, 1.0);
 }
 `;
 
+// A floating bubble is a thin liquid film dome (a spherical cap) standing on
+// the surface, with a small meniscus skirt where the film meets the liquid.
+// The film is ~1 um thick, so light passes through it undeviated: what makes
+// a bubble visible is only the two reflections (outer face and the inside of
+// the far face) plus the curled-up liquid around its foot.
 export const bubbleFS = /* glsl */ `
-uniform mat4 uView;
-in vec2 vC; in vec3 vCenter; in float vRad; flat in float vAlive; in float vMilk;
+in vec3 vWorldPos, vCenter; in float vRad, vMilk; flat in float vAlive;
 out vec4 o;
+float filmR(float c) { float F = fresnel(c, 0.02); return 2.0 * F / (1.0 + F); }
 void main() {
-  float d = length(vC);
-  if (d > 1.45 || vAlive < 0.5) discard;
-  vec3 right = vec3(uView[0][0], uView[1][0], uView[2][0]);
-  vec3 up = vec3(uView[0][1], uView[1][1], uView[2][1]);
-  vec3 fwd = normalize(uCamPos - vCenter);
-  vec3 local = vCenter - uCupPos;
-  if (d < 1.0) {
-    vec3 n = normalize(right * vC.x + up * vC.y + fwd * sqrt(1.0 - d * d));
-    vec3 wp = vCenter + n * vRad;
-    if (wp.y < vCenter.y - vRad * 0.2) discard;
-    vec3 v = fwd;
-    float F = fresnel(dot(n, v), 0.02);
-    float a = clamp(2.0 * F + 0.05, 0.0, 1.0);
-    vec3 refl = traceInterior(local + n * vRad, reflect(-v, n));
-    // the thin brown film tints what is seen through it; a darker base ring
-    float rim = smoothstep(0.75, 1.0, d);
-    vec3 col = refl * F * 2.0 + vec3(0.035, 0.022, 0.014) * rim * (1.0 - vMilk * 3.0);
-    // milky films scatter light: bubbles in milk look white, not glassy
-    float film = smoothstep(0.0, 0.12, vMilk);
-    vec3 irr = windowLight(n) * interiorShadow(local + n * vRad) + ambient(n) * 0.7;
-    col = mix(col, vec3(0.85, 0.8, 0.72) / PI * irr * (0.35 + 0.4 * rim) + refl * F, film * 0.8);
-    a = mix(a, 0.25 + 0.5 * rim, film * 0.8);
-    o = vec4(col, a * 0.95);
-  } else {
-    // meniscus around the bubble: surface curls up and mirrors the room
-    float t = (d - 1.0) / 0.45;
-    vec2 dir = normalize(vC);
-    vec3 radial = normalize(right * dir.x + up * dir.y);
-    radial.y = 0.0; radial = normalize(radial + 1e-5);
-    vec3 n = normalize(vec3(0.0, 1.0, 0.0) - radial * 0.9 * (1.0 - t) * (1.0 - t));
-    vec3 v = fwd;
-    float F = fresnel(dot(n, v), 0.02);
-    vec3 refl = traceInterior(local, reflect(-v, n));
-    float a = (1.0 - t) * (1.0 - t) * 0.9;
-    o = vec4(refl * F * a, a * 0.5);
+  if (vAlive < 0.5) discard;
+  vec3 ro = uCamPos, rd = normalize(vWorldPos - uCamPos);
+  float a = vRad;
+  // small bubbles are near-hemispheres, larger ones sag into flatter caps
+  float hc = a * mix(0.9, 0.5, smoothstep(0.0003, 0.0016, a));
+  float Rs = (a * a + hc * hc) / (2.0 * hc);
+  vec3 sc = vCenter + vec3(0.0, hc - Rs, 0.0);
+  float base = vCenter.y;
+  float tp = rd.y < -1e-4 ? (base - ro.y) / rd.y : 1e9;
+
+  vec3 oc = ro - sc;
+  float b = dot(oc, rd), disc = b * b - (dot(oc, oc) - Rs * Rs);
+  if (disc > 0.0) {
+    float sq = sqrt(disc), t0 = -b - sq, t1 = -b + sq;
+    vec3 p0 = ro + rd * t0, p1 = ro + rd * t1;
+    if (p0.y >= base && t0 < tp) {
+      // outer face
+      vec3 n0 = (p0 - sc) / Rs;
+      float F0 = filmR(dot(n0, -rd));
+      vec3 R0 = traceInterior(p0 - uCupPos, reflect(rd, n0));
+      // inner face of the far side (if the ray exits through the film)
+      float F1 = 0.0; vec3 R1 = vec3(0.0);
+      if (p1.y >= base) {
+        vec3 n1 = -(p1 - sc) / Rs;
+        F1 = filmR(dot(n1, -rd));
+        R1 = traceInterior(p1 - uCupPos, reflect(rd, n1));
+      }
+      // soften the silhouette (bubbles are only a few pixels wide)
+      float aa = smoothstep(0.0, 0.12, sq / Rs);
+      vec3 col = F0 * R0 + (1.0 - F0) * F1 * R1;
+      float alpha = 1.0 - (1.0 - F0) * (1.0 - F1);
+      // milky films scatter a little light of their own
+      float film = smoothstep(0.02, 0.2, vMilk) * 0.35;
+      vec3 irr = windowLight(n0) * interiorShadow(p0 - uCupPos) + ambient(n0) * 0.7;
+      col += vec3(0.9, 0.85, 0.78) / PI * irr * film * (1.0 - alpha);
+      alpha += film * (1.0 - alpha);
+      o = vec4(col, alpha) * aa;
+      return;
+    }
   }
+  // meniscus skirt: the liquid climbs the foot of the film
+  if (tp > 1e8) discard;
+  vec3 pp = ro + rd * tp;
+  vec2 dvec = pp.xz - vCenter.xz;
+  float d = length(dvec);
+  float w = 0.55 * a + 0.00025;
+  if (d < a || d > a + w) discard;
+  float t = (d - a) / w;
+  float slope = 1.1 * (1.0 - t) * (1.0 - t);
+  vec2 rdir = dvec / d;
+  vec3 n = normalize(vec3(rdir.x * slope, 1.0, rdir.y * slope));
+  float F = fresnel(dot(n, -rd), 0.02);
+  vec3 R = traceInterior(pp - uCupPos, reflect(rd, n));
+  float k = (1.0 - t) * (1.0 - t);
+  o = vec4(R * F * k, F * k);
 }
 `;
 
