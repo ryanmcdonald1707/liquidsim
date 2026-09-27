@@ -3,7 +3,7 @@ import * as G from './gl.js';
 import * as geo from './geometry.js';
 import * as S from './shaders.js';
 import * as LS from './lab-shaders.js';
-import { LIQUIDS, ADDITIVES } from './liquids.js';
+import { LIQUIDS, ADDITIVES, CATEGORIES } from './liquids.js';
 
 const { mat4 } = G;
 
@@ -41,6 +41,7 @@ const state = {
   addBase: 0, addTarget: 0, pool: 0, oil: 0, mixDepth: 0.01,
   pour: 0, pourPos: [0, 0], pourDur: 1, poured: false,
   slosh: [],
+  foamH: 0, frost: 0, magnet: false, spike: 0,
 };
 let modal = null, M = 0, Nr = 256, profiles = null, profTex = null;
 let men = { h: 0, lc: 0.0027 };
@@ -63,7 +64,7 @@ const probeBuf = new Float32Array(129 * 4);
 const wetTex = G.texture(gl, 1, 1, gl.RGBA16F, gl.RGBA, gl.FLOAT, L, new Float32Array([-1e3, 0, 0, 0]));
 
 // an oil film calms the short waves (Marangoni elasticity)
-const oilDamping = () => 0.08 * Math.min(state.oil * 30, 1);
+const oilDamping = () => 0.08 * Math.min(state.oil * 30, 1) + 0.6 * Math.min(state.foamH / 0.01, 1.5);
 function buildModal() {
   const liq = LIQUIDS[state.liquid];
   const g = 9.81 * state.gravity;
@@ -93,6 +94,7 @@ const P = {
   surface: G.program(gl, src(LS.labSurfaceVS), src(LS.labSurfaceFS)),
   side: G.program(gl, src(LS.labSideVS), src(LS.labSideFS)),
   glass: G.program(gl, src(LS.glassVS), src(LS.glassFS)),
+  vapor: G.program(gl, src(LS.vaporVS), src(LS.vaporFS)),
   height: G.program(gl, flowSrc(S.fsVS), flowSrc(S.heightFS)),
   advectVel: G.program(gl, flowSrc(S.fsVS), flowSrc(S.advectVelFS)),
   curl: G.program(gl, flowSrc(S.fsVS), flowSrc(S.curlFS)),
@@ -137,6 +139,8 @@ const meshes = {
   stream: G.mesh(gl, cylinder(1, 0, 1, 24, 1)),
   quad: G.mesh(gl, geo.quad()),
 };
+const VAPOR_BOX = [-0.16, 0.0, -0.16, 0.16, D.RIM_Y + 0.2, 0.16];
+meshes.vapor = G.mesh(gl, geo.box(...VAPOR_BOX));
 
 // ---------------------------------------------------------------------------
 let quality = 1, W = 0, H = 0, msaa = null, hdr = null, bloomA = null, bloomB = null, bloomC = null, bloomD = null;
@@ -251,6 +255,8 @@ function pour() {
   state.pourPos = [r * Math.cos(a), r * Math.sin(a)];
   if (add.immiscible) { state.oil += add.amount; modal.setExtraDamping(oilDamping()); updateReadout(); return; }
   state.poured = true;
+  const base = LIQUIDS[state.liquid];
+  if (base.foam) state.foamH = Math.min(base.foam * 1.2, state.foamH + base.foam * 0.5);
   // on liquid metal everything floats: it stays on top as a film
   if (!LIQUIDS[state.liquid].metal && add.buoyancy !== 'sink') state.addTarget = Math.min(0.6, state.addTarget + add.amount);
   // (a sinking additive's pool grows while its stream falls)
@@ -288,6 +294,7 @@ function setLiquid(key) {
   state.base = { sigA: liq.sigA.slice(), sigS: liq.sigS.slice() };
   state.addBase = state.addTarget = state.pool = state.oil = 0;
   state.poured = false;
+  state.foamH = liq.foam || 0; state.frost = 0; state.spike = 0;
   clearTargets(vel.read, vel.write, pres.read, pres.write, dye.read, dye.write);
   buildModal();
   syncUI();
@@ -312,10 +319,28 @@ function chips(el, table, key, onPick) {
     el.appendChild(b);
   }
 }
-chips($('liquids'), LIQUIDS, 'liquid', (k) => setLiquid(k));
+{
+  const el = $('liquids');
+  el.innerHTML = '';
+  for (const [title, keys] of CATEGORIES) {
+    const h = document.createElement('div'); h.className = 'cat'; h.textContent = title; el.appendChild(h);
+    const row = document.createElement('div'); row.className = 'chips';
+    for (const k of keys) {
+      const v = LIQUIDS[k], b = document.createElement('button');
+      b.className = 'chip'; b.dataset.key = k;
+      b.innerHTML = `<i style="background:${v.swatch}"></i>${v.name}`;
+      b.addEventListener('click', () => setLiquid(k));
+      row.appendChild(b);
+    }
+    el.appendChild(row);
+  }
+}
 chips($('additives'), ADDITIVES, 'additive', (k) => { if (k !== state.additive) { bakeAdditive(); state.additive = k; } syncUI(); });
 function syncUI() {
-  for (const b of $('liquids').children) b.classList.toggle('on', b.dataset.key === state.liquid);
+  for (const b of $('liquids').querySelectorAll('.chip')) b.classList.toggle('on', b.dataset.key === state.liquid);
+  const mag = $('b-magnet');
+  mag.hidden = !LIQUIDS[state.liquid].magnetic;
+  mag.classList.toggle('off', !state.magnet);
   for (const b of $('additives').children) b.classList.toggle('on', b.dataset.key === state.additive);
   $('b-pour').firstChild.textContent = `Pour ${ADDITIVES[state.additive].name.toLowerCase()}`;
   $('note').textContent = LIQUIDS[state.liquid].note;
@@ -343,10 +368,12 @@ $('b-drop').addEventListener('click', () => { const a = Math.random() * 6.28, r 
 $('b-knock').addEventListener('click', knock);
 $('b-slosh').addEventListener('click', () => { const a = cam.az + Math.PI / 2; sloshPulse(Math.cos(a), -Math.sin(a)); });
 $('b-reset').addEventListener('click', resetSample);
+$('b-magnet').addEventListener('click', () => { state.magnet = !state.magnet; syncUI(); updateReadout(); });
 window.addEventListener('keydown', (e) => {
   if (!G.isShortcut(e)) return;
   const k = e.key.toLowerCase();
   if (k === 's') autoStir(); else if (k === 'p') pour(); else if (k === 'k') knock(); else if (k === 'r') resetSample();
+  else if (k === 'g' && LIQUIDS[state.liquid].magnetic) $('b-magnet').click();
   else if (k === 'd') $('b-drop').click();
   else if (k.startsWith('arrow')) {
     const d = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, -1], arrowdown: [0, 1] }[k];
@@ -355,6 +382,13 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+// Terminal rise speed of a gas bubble: Stokes' law for small bubbles, capped
+// by the inertial regime (~1.6 sqrt(g r)) for millimetre bubbles.
+function riseSpeed(liq) {
+  const g = 9.81 * state.gravity, r = liq.bubble || 0.0005;
+  const stokes = (2 / 9) * liq.rho * g * r * r / (liq.rho * liq.nu);
+  return Math.min(stokes, 1.6 * Math.sqrt(g * r));
+}
 function updateReadout() {
   const liq = LIQUIDS[state.liquid], g = 9.81 * state.gravity;
   const mu = liq.rho * liq.nu * 1000;
@@ -372,6 +406,9 @@ function updateReadout() {
     ['Slosh', sl.over ? `over-damped (τ ${(1 / sl.decay).toFixed(2)} s)` : `${sl.hz.toFixed(2)} Hz, τ ${(1 / sl.decay).toFixed(1)} s`],
     ['Wave modes', modal.n.toLocaleString()],
   ];
+  if (liq.carb) rows.push([liq.boil ? 'Boiling bubbles rise at' : 'Bubbles rise at', `${(riseSpeed(liq) * 100).toFixed(0)} cm/s`]);
+  if (liq.foam) rows.push(['Head half-life', liq.halfLife < 60 ? `${liq.halfLife} s` : `${(liq.halfLife / 60).toFixed(0)} min`]);
+  if (liq.magnetic) rows.push(['Spike spacing', `${(2 * Math.PI * men.lc * 1000).toFixed(1)} mm`], ['Magnet', state.magnet ? 'on' : 'off']);
   $('readout').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
 }
 
@@ -417,6 +454,25 @@ function stepPhysics(dt) {
     if (rod.blend > 0.9) modal.dipole(rod.pos[0], rod.pos[1], relV[0], relV[1], dipole, 0.003, sub);
   }
   if (Math.random() < dt * 3) modal.jitter(2e-6);
+  // bursting bubbles: boiling liquid nitrogen churns, fizzy drinks prickle
+  if (liq.carb && state.foamH < 0.002) {
+    const n = liq.boil ? 3 : 1, amp = liq.boil ? 0.0018 : 0.00025 * liq.carb;
+    for (let i = 0; i < n; i++) if (Math.random() < dt * (liq.boil ? 60 : 25)) {
+      const a = Math.random() * 6.283, r = Math.sqrt(Math.random()) * D.R_IN * 0.9;
+      modal.impulse(r * Math.cos(a), r * Math.sin(a), amp, liq.boil ? 0.0025 : 0.0012);
+    }
+  }
+  // the foam head drains and coarsens; stirring a fizzy drink whips up more
+  if (liq.foam) {
+    state.foamH *= Math.pow(0.5, dt / liq.halfLife);
+    const stir = rod.blend > 0.8 ? Math.hypot(rod.vel[0] - rod.fluid[0], rod.vel[1] - rod.fluid[1]) : 0;
+    if (stir > 0.08) state.foamH = Math.min(liq.foam * 1.2, state.foamH + dt * stir * 0.02);
+  }
+  modal.setExtraDamping(Math.round(oilDamping() * 40) / 40); // quantised: rebuilding propagators costs ~4 ms
+  // frost builds on glass holding a cryogenic liquid
+  state.frost += ((liq.vapor === 'fog' ? 1 : 0) - state.frost) * (1 - Math.exp(-dt / (liq.vapor === 'fog' ? 12 : 3)));
+  // ferrofluid spikes grow when the magnet is on (and relax when it's off)
+  state.spike += ((liq.magnetic && state.magnet ? 7 : 0) - state.spike) * (1 - Math.exp(-dt * (state.magnet ? 3 : 6)));
   const pouring = state.pour > 0;
   if (pouring) {
     const p = state.pourPos, j = () => (Math.random() - 0.5) * 0.003;
@@ -547,10 +603,13 @@ function render() {
     uProfile: prof, uColumn: col, uRodA: rA, uRodB: rB, uRodIn: rod.blend > 0.6 ? 1 : 0,
     uOilA: ADDITIVES.oil.sigA, uOilS: ADDITIVES.oil.sigS, uHasOil: state.oil > 0 ? 1 : 0,
     uHasAdd: state.poured || state.addBase > 1e-6 || state.pool > 1e-6 ? 1 : 0,
+    uOilThick: state.oil * (state.fill - D.INNER_BOTTOM),
+    uCarb: liq.carb || 0, uBubR: liq.bubble || 0.0005, uRise: liq.carb ? riseSpeed(liq) : 0, uBoil: liq.boil ? 1 : 0,
+    uFoamH: state.foamH, uFoamCol: liq.foamCol || [0.95, 0.93, 0.88], uFrost: state.frost,
   };
 
   gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
-  pass(P.height, heightT, { uProfiles: profTex, uM: { int: M }, uNr: Nr });
+  pass(P.height, heightT, { uProfiles: profTex, uM: { int: M }, uNr: Nr, uSpike: state.spike, uSpikeK: 1 / men.lc });
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, msaa.fbo);
   gl.viewport(0, 0, W, H);
@@ -587,6 +646,14 @@ function render() {
   G.use(gl, P.glass, U);
   gl.cullFace(gl.FRONT); meshes.glass.draw();
   gl.cullFace(gl.BACK); meshes.glass.draw();
+  // steam from hot liquids, cold fog from liquid nitrogen
+  if (liq.vapor) {
+    gl.disable(gl.DEPTH_TEST);
+    gl.cullFace(gl.FRONT);
+    G.use(gl, P.vapor, { ...U, uVapor: liq.vapor === 'fog' ? -1 : 1, uBoxMin: VAPOR_BOX.slice(0, 3), uBoxMax: VAPOR_BOX.slice(3) });
+    meshes.vapor.draw();
+    gl.enable(gl.DEPTH_TEST);
+  }
   gl.disable(gl.CULL_FACE);
   gl.depthMask(true);
   gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST);
@@ -631,6 +698,7 @@ status.style.display = 'none';
 window.__lab = {
   advance(sec) { for (let t = 0; t < sec; t += 1 / 60) stepPhysics(1 / 60); },
   state, cam, rod, setLiquid, pour, knock, autoStir, sloshPulse, dropAt,
+  magnet(on) { state.magnet = on; syncUI(); updateReadout(); },
   setAdditive(k) { bakeAdditive(); state.additive = k; syncUI(); },
 };
 requestAnimationFrame(frame);

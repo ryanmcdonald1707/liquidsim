@@ -69,22 +69,32 @@ The azimuthally averaged swirl is read back and integrated as `dη/dr = u_θ²/(
 
 A 400 ml borosilicate beaker on a lab bench. Pick a base liquid and something to pour in, then stir, drop, knock or slosh it.
 
-**Base liquids, each with its real density, viscosity, surface tension, refractive index, contact angle and absorption and scattering spectra:**
-water, black coffee, black tea, whole milk, red wine, olive oil, honey, orange juice, and mercury.
+**Base liquids, each with its real density, viscosity, surface tension, refractive index, contact angle and absorption and scattering spectra.** There are 19, in four groups:
+- **Everyday:** water, black coffee, black tea, whole milk, red wine, orange juice.
+- **Fizzy:** sparkling water, cola, lager, nitro stout.
+- **Viscous:** olive oil, honey, maple syrup, motor oil, glycerin.
+- **Exotic:** mercury, liquid nitrogen, ferrofluid, blood.
 
 The wave solver is rebuilt for each liquid, so they genuinely behave differently:
 - **Water:** long-lived ripples.
-- **Honey:** every mode is over-damped (the propagator handles this exactly), so the surface creeps instead of rippling.
+- **Honey and glycerin:** every mode is over-damped (the propagator handles this exactly), so the surface creeps instead of rippling.
 - **Mercury:** a liquid-metal mirror with 7× water's surface tension. It has a convex meniscus because it doesn't wet glass.
+
+**Special behaviour:**
+- **Gas bubbles:** fizzy drinks carry rising streams of CO₂ bubbles from nucleation sites on the bottom and wall. Each bubble grows as it rises, at a rise speed set by Stokes' law or the inertial limit. Each shows the bright silvery rim that total internal reflection gives a gas bubble in liquid, and bursting bubbles keep the surface prickling.
+- **Foam heads:** beer and cola pour with a head that decays with its own half-life, from seconds for cola to minutes for nitro stout. The head damps the waves. Stirring, or pouring something in, whips up more.
+- **Liquid nitrogen:** it boils violently and frosts the outside of the glass below the liquid line. A dense cold fog fills the headspace, spills over the rim, and pools on the bench. Hot coffee and tea steam instead.
+- **Ferrofluid:** turn on the magnet (`G`) and the surface rises into the hexagonal Rosensweig spike pattern. The spike spacing is the capillary wavelength 2π·√(σ/ρg), so the gravity slider changes it too.
 
 The **gravity** slider (Moon to Jupiter) and **fill** slider rebuild the modes too. The **Physics** panel shows the numbers that follow from the physics: capillary length, meniscus height, slowest ripple speed, Bond number, and slosh frequency and decay.
 
-**Additives:** milk, cream, blue and red food dye, ink, espresso, honey, and olive oil.
+**Additives:** milk, cream, blue, red and green food dye, ink, espresso, grenadine, honey, and olive oil.
 - Miscible ones plume down in billowing tendrils and slowly mix into the bulk.
-- Honey sinks as a falling stream and pools at the bottom until you stir it in.
-- Oil floats as an immiscible layer that keeps sharp edges and calms the ripples.
+- Grenadine and honey sink as a falling stream and pool at the bottom (a layered drink) until you stir them in.
+- Olive oil floats as an immiscible golden layer that keeps sharp edges and calms the ripples.
+- On mercury, everything floats as a film over the mirror.
 
-Switching additive keeps whatever is already mixed in.
+Switching additive keeps whatever is already mixed in, and a floating oil layer stays put.
 
 **Rendering:** because the beaker is glass, the liquid is rendered volumetrically by ray marching through it. This gives:
 - Beer–Lambert absorption plus a Kubelka–Munk multiple-scattering source term
@@ -131,6 +141,10 @@ A 30 × 30 cm patch of surface you can tilt from floor to wall. It's built for s
 | Lab: red dye in water | Lab: stirring honey | Lab: mercury |
 | --- | --- | --- |
 | ![dye](docs/lab-dye.png) | ![honey](docs/lab-honey.png) | ![mercury](docs/lab-mercury.png) |
+
+| Lab: lager with a head | Lab: ferrofluid spikes | Lab: liquid nitrogen | Lab: grenadine sinking |
+| --- | --- | --- | --- |
+| ![lager](docs/lab-lager.png) | ![ferrofluid](docs/lab-ferrofluid.png) | ![ln2](docs/lab-ln2.png) | ![grenadine](docs/lab-grenadine.png) |
 
 | Blood: impact spatter | Blood: clotted pool, dried spatter | Blood: soaking into cotton |
 | --- | --- | --- |

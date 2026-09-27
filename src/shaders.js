@@ -436,8 +436,18 @@ export const heightFS = /* glsl */ `
 uniform sampler2D uProfiles;
 uniform int uM;
 uniform float uNr;
+uniform float uSpike, uSpikeK; // ferrofluid: Rosensweig spike height (mm), wavenumber (1/m)
 in vec2 vUv;
 out vec4 o;
+// Hexagonal lattice of peaks (three plane waves 120 deg apart), sharpened into
+// cones; strongest over the magnet, fading towards the wall.
+float spikeField(vec2 q) {
+  const vec2 d1 = vec2(1.0, 0.0), d2 = vec2(-0.5, 0.8660254), d3 = vec2(-0.5, -0.8660254);
+  float P = (cos(uSpikeK * dot(d1, q)) + cos(uSpikeK * dot(d2, q)) + cos(uSpikeK * dot(d3, q))) / 3.0;
+  float s = max(P, 0.0);
+  float env = exp(-pow(length(q) / (0.74 * R_IN), 4.0));
+  return (s * s * s - 0.09) * env; // minus the mean: volume is conserved
+}
 void main() {
   vec2 q = (vUv - 0.5) * 2.0 * R_IN;
   float r = max(length(q), R_IN * 1e-3);
@@ -459,6 +469,12 @@ void main() {
   ht *= 0.001 / r; // mm -> m, and 1/r for the angular derivative
   float c = cs1.x, s = cs1.y;
   vec2 grad = vec2(c * hr - s * ht, s * hr + c * ht);
+  if (uSpike > 0.0) {
+    float e = 0.00015;
+    h += uSpike * spikeField(q);
+    grad += uSpike * 0.001 * vec2(spikeField(q + vec2(e, 0.0)) - spikeField(q - vec2(e, 0.0)),
+                                  spikeField(q + vec2(0.0, e)) - spikeField(q - vec2(0.0, e))) / (2.0 * e);
+  }
   o = vec4(h, grad, 0.0);
 }
 `;
