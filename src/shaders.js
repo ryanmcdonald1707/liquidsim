@@ -165,9 +165,25 @@ vec3 shadeCeramic(vec3 p, vec3 n, vec3 v, float interior) {
   return diff * (1.0 - F) + spec * F;
 }
 
-// Trace a ray from a point inside the cup: returns what it sees (wall or room).
-vec3 traceInterior(vec3 p, vec3 d) {
-  if (d.y < -0.02) return vec3(0.004, 0.0025, 0.0015);
+// Kubelka-Munk diffuse reflectance of a semi-infinite scattering medium.
+vec3 kmAlbedo(vec3 sa, vec3 ss) { vec3 k = 2.0 * sa / max(ss, vec3(1e-4)); return 1.0 + k - sqrt(k * k + 2.0 * k); }
+// Optical properties (1/m). Black coffee: strong absorption rising to the
+// blue, very weak colloidal scattering. Milk: strong, white scattering.
+vec3 liquidSigA(float milk) { return mix(vec3(80.0, 210.0, 450.0), vec3(0.8, 1.5, 4.0), milk); }
+vec3 liquidSigS(float milk) { return mix(vec3(4.0), vec3(12000.0, 12200.0, 12500.0), milk); }
+// Diffuse radiance of the (roughly flat) liquid at p, as seen from above.
+vec3 liquidBody(vec3 p, float milk) {
+  vec3 n = vec3(0.0, 1.0, 0.0);
+  float d = INNER_TOP - p.y, r = length(p.xz);
+  float ao = mix((R_IN * R_IN) / (R_IN * R_IN + d * d), 0.45, pow(r / R_IN, 3.0));
+  vec3 irr = windowLight(n) * interiorShadow(p) + ambient(n) * ao;
+  return kmAlbedo(liquidSigA(milk), liquidSigS(milk)) / PI * irr;
+}
+
+// Trace a ray from a point inside the cup: returns what it sees (wall, room,
+// or - for downward rays - the liquid, whose look is supplied by the caller).
+vec3 traceInteriorL(vec3 p, vec3 d, vec3 liquid) {
+  if (d.y < -0.02) return liquid;
   float t = wallDist(p, d);
   vec3 q = p + t * d;
   if (q.y < INNER_TOP + 0.0015) {
@@ -176,6 +192,7 @@ vec3 traceInterior(vec3 p, vec3 d) {
   }
   return env(d, 0.0);
 }
+vec3 traceInterior(vec3 p, vec3 d) { return traceInteriorL(p, d, vec3(0.004, 0.0025, 0.0015)); }
 `;
 
 export const bgVS = /* glsl */ `
@@ -315,9 +332,6 @@ uniform float uMilkBase;
 in vec3 vLocal, vWorld; in vec2 vUv;
 out vec4 o;
 
-// Kubelka-Munk diffuse reflectance of a semi-infinite scattering medium.
-vec3 kmAlbedo(vec3 sa, vec3 ss) { vec3 k = 2.0 * sa / max(ss, vec3(1e-4)); return 1.0 + k - sqrt(k * k + 2.0 * k); }
-
 void main() {
   vec4 H = texture(uHeight, vUv);
   vec3 N = normalize(vec3(-H.g, 1.0, -H.b));
@@ -330,8 +344,8 @@ void main() {
 
   // Optical properties (1/m). Black coffee: strong absorption rising to the
   // blue, very weak colloidal scattering. Milk: strong, white scattering.
-  vec3 sigA = mix(vec3(80.0, 210.0, 450.0), vec3(0.8, 1.5, 4.0), milk);
-  vec3 sigS = mix(vec3(4.0), vec3(12000.0, 12200.0, 12500.0), milk);
+  vec3 sigA = liquidSigA(milk);
+  vec3 sigS = liquidSigS(milk);
   vec3 ext = sigA + sigS;
 
   // Light arriving at the surface point
@@ -671,7 +685,8 @@ uniform mat4 uViewProj, uView;
 uniform sampler2D uState, uHeight, uDye;
 uniform float uMilkBase;
 in vec3 aPos;
-out vec3 vWorldPos, vCenter; out float vRad, vMilk; flat out float vAlive;
+uniform float uViewportH;
+out vec3 vWorldPos, vCenter; out float vRad, vMilk, vVis; flat out float vAlive;
 void main() {
   int id = gl_InstanceID;
   vec4 s = texelFetch(uState, ivec2(id % 64, id / 64), 0);
@@ -688,6 +703,10 @@ void main() {
   // it; the dome itself is ray traced in the fragment shader
   vec3 wp = c + toCam * rad * 2.0 + (right * aPos.x + up * aPos.y) * rad * 2.1;
   vWorldPos = wp; vCenter = c; vRad = max(rad, 1e-6);
+  // sub-pixel bubbles are invisible in reality; fading them avoids speckle
+  vec4 cc = uViewProj * vec4(c, 1.0);
+  float px = rad * uViewProj[1][1] * 0.5 * uViewportH / max(cc.w, 1e-4);
+  vVis = smoothstep(0.8, 2.2, px);
   gl_Position = vAlive > 0.5 ? uViewProj * vec4(wp, 1.0) : vec4(2.0, 2.0, 2.0, 1.0);
 }
 `;
@@ -698,12 +717,14 @@ void main() {
 // a bubble visible is only the two reflections (outer face and the inside of
 // the far face) plus the curled-up liquid around its foot.
 export const bubbleFS = /* glsl */ `
-in vec3 vWorldPos, vCenter; in float vRad, vMilk; flat in float vAlive;
+in vec3 vWorldPos, vCenter; in float vRad, vMilk, vVis; flat in float vAlive;
 out vec4 o;
 float filmR(float c) { float F = fresnel(c, 0.02); return 2.0 * F / (1.0 + F); }
 void main() {
-  if (vAlive < 0.5) discard;
+  if (vAlive < 0.5 || vVis < 0.01) discard;
   vec3 ro = uCamPos, rd = normalize(vWorldPos - uCamPos);
+  // what a downward reflection sees: the liquid around the bubble
+  vec3 liq = liquidBody(vCenter - uCupPos, vMilk) + vec3(0.004, 0.0025, 0.0015);
   float a = vRad;
   // small bubbles are near-hemispheres, larger ones sag into flatter caps
   float hc = a * mix(0.9, 0.5, smoothstep(0.0003, 0.0016, a));
@@ -721,13 +742,13 @@ void main() {
       // outer face
       vec3 n0 = (p0 - sc) / Rs;
       float F0 = filmR(dot(n0, -rd));
-      vec3 R0 = traceInterior(p0 - uCupPos, reflect(rd, n0));
+      vec3 R0 = traceInteriorL(p0 - uCupPos, reflect(rd, n0), liq);
       // inner face of the far side (if the ray exits through the film)
       float F1 = 0.0; vec3 R1 = vec3(0.0);
       if (p1.y >= base) {
         vec3 n1 = -(p1 - sc) / Rs;
         F1 = filmR(dot(n1, -rd));
-        R1 = traceInterior(p1 - uCupPos, reflect(rd, n1));
+        R1 = traceInteriorL(p1 - uCupPos, reflect(rd, n1), liq);
       }
       // soften the silhouette (bubbles are only a few pixels wide)
       float aa = smoothstep(0.0, 0.12, sq / Rs);
@@ -738,7 +759,9 @@ void main() {
       vec3 irr = windowLight(n0) * interiorShadow(p0 - uCupPos) + ambient(n0) * 0.7;
       col += vec3(0.9, 0.85, 0.78) / PI * irr * film * (1.0 - alpha);
       alpha += film * (1.0 - alpha);
-      o = vec4(col, alpha) * aa;
+      // the flat liquid behind is already drawn; a reflection of that same
+      // liquid should not darken or tint it, so blend towards "no change"
+      o = vec4(col, alpha) * aa * vVis;
       return;
     }
   }
@@ -754,8 +777,8 @@ void main() {
   vec2 rdir = dvec / d;
   vec3 n = normalize(vec3(rdir.x * slope, 1.0, rdir.y * slope));
   float F = fresnel(dot(n, -rd), 0.02);
-  vec3 R = traceInterior(pp - uCupPos, reflect(rd, n));
-  float k = (1.0 - t) * (1.0 - t);
+  vec3 R = traceInteriorL(pp - uCupPos, reflect(rd, n), liq);
+  float k = (1.0 - t) * (1.0 - t) * vVis;
   o = vec4(R * F * k, F * k);
 }
 `;

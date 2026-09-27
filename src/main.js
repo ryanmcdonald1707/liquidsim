@@ -586,7 +586,7 @@ function render() {
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   gl.depthMask(false);
-  G.use(gl, P.bubble, { ...common, uView: camM.view, uState: bub.read.tex, uHeight: heightT.tex, uDye: dye.read.tex, uMilkBase: events.milkBase });
+  G.use(gl, P.bubble, { ...common, uView: camM.view, uState: bub.read.tex, uHeight: heightT.tex, uDye: dye.read.tex, uMilkBase: events.milkBase, uViewportH: H });
   meshes.bubble.drawInstanced(NB);
 
   if (steamOn) {
