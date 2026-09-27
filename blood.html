@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Blood Mechanics</title>
+<link rel="stylesheet" href="src/ui.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="status">Preparing the surface…</div>
+<nav class="tabs"><a href="index.html">Café</a><a href="lab.html">Lab</a><a href="blood.html" class="on">Blood</a></nav>
+
+<aside class="panel left">
+  <h2>Tool</h2>
+  <div id="tools" class="chips"></div>
+  <p id="hint" class="hint"></p>
+  <h2>Surface</h2>
+  <div id="surfaces" class="chips"></div>
+  <h2>Surface angle <span id="tilt-v" class="val"></span></h2>
+  <input id="tilt" type="range" min="0" max="90" step="1" value="0">
+  <h2>Drop height <span id="height-v" class="val"></span></h2>
+  <input id="height" type="range" min="-1.3" max="0.5" step="0.01" value="0">
+  <h2>Oxygenation <span id="oxy-v" class="val"></span></h2>
+  <input id="oxy" type="range" min="0" max="1" step="0.01" value="0.35">
+  <h2>Time scale <span id="time-v" class="val"></span></h2>
+  <input id="time" type="range" min="0" max="2.78" step="0.01" value="0">
+  <div class="presets"><button id="b-clean">Clean surface</button></div>
+</aside>
+
+<aside class="panel right">
+  <h2>Blood physics</h2>
+  <dl id="readout"></dl>
+  <p class="note">Whole blood is shear-thinning (Carreau model), has a small yield stress, clots in minutes and browns as haemoglobin oxidises. Speed up time to watch it clot, dry and crack.</p>
+</aside>
+
+<div id="fps"></div>
+<script type="module" src="src/blood.js"></script>
+</body>
+</html>

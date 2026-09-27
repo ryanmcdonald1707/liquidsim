@@ -14,6 +14,7 @@ The page has two tabs:
 
 - **Café** (`index.html`): a cup of coffee on a wooden table.
 - **Lab** (`lab.html`): a glass beaker for testing different liquids — see [The lab](#the-lab).
+- **Blood** (`blood.html`): blood on surfaces, for games — see [Blood mechanics](#blood-mechanics).
 
 ## Controls
 
@@ -93,6 +94,34 @@ Switching additive keeps whatever is already mixed in.
 - a stirring rod that looks bent where it enters the liquid
 - a coloured shadow and cylindrical-lens caustic on the gridded bench mat
 
+## Blood mechanics
+
+A 30 × 30 cm patch of surface you can tilt from floor to wall. It's built for studying how blood should look and behave in games.
+
+**Tools:**
+- **Drip:** a single drop from a chosen height.
+- **Bleed:** a steady ooze.
+- **Arterial spurt:** a pulsatile jet at 75 bpm.
+- **Impact spatter:** drag to set the direction and strength of a blow.
+- **Cast-off:** flung off a swung object in a line.
+- **Smear:** wipe through wet blood.
+
+**Surfaces:** glazed tile (blood runs into the grout), concrete (porous), varnished wood (wicks along the grain), cotton fabric (soaks in fast and wicks outwards), and brushed steel.
+
+**What's simulated:**
+- **Thin-film flow:** a lubrication-equation solver on the surface, driven by gravity along and into the slope. The substrate's relief matters, so grout lines, pores and grain channel the blood.
+- **Blood rheology:** blood is shear-thinning (Carreau–Yasuda, Cho & Kensey 1991), from 56 mPa·s at rest down to 3.5 mPa·s. It also has a small yield stress from red-cell rouleaux.
+- **Contact lines:** thin films can't creep onto dry surface, and advancing contact lines are strongly damped. So pools stop at a realistic thickness, and drips running down a wall leave a trail and then stop.
+- **Drop impacts:** each droplet in flight is ballistic with air drag, and a released drop approaches its terminal velocity (~7.6 m/s). On impact:
+  - stain diameter comes from the energy balance of Pasandideh-Fard et al.;
+  - elongation follows the bloodstain-analysis rule W/L = sin α, with a tail pointing the way the drop travelled;
+  - scalloped rims, spines and satellite droplets appear once the splash parameter K = Oh·Re^1.25 (Mundo et al.) exceeds a threshold that depends on the surface's roughness.
+
+  The last impact's numbers appear in the side panel.
+- **Porous surfaces:** they absorb blood into the pores, then wick it outwards by capillarity. Wood wicks anisotropically, along the grain.
+- **Clotting and drying:** blood clots over minutes, stops flowing, and loses its mirror gloss. Clot retraction leaves a straw-coloured serum rim. Evaporation, fastest at thin edges, leaves a coffee-ring deposit that browns as haemoglobin oxidises, and thick crusts crack. Use the time-scale slider to fast-forward.
+- **Optics:** haemoglobin absorption and red-cell scattering are combined with two-layer Kubelka–Munk over the substrate, so thin smears are lighter red and thick pools are deep crimson. Arterial (oxygenated) blood is brighter than venous blood, and the wet film has gloss and a meniscus bulge.
+
 ## Screenshots
 
 | Stirring | Milk | Droplet |
@@ -102,3 +131,7 @@ Switching additive keeps whatever is already mixed in.
 | Lab: red dye in water | Lab: stirring honey | Lab: mercury |
 | --- | --- | --- |
 | ![dye](docs/lab-dye.png) | ![honey](docs/lab-honey.png) | ![mercury](docs/lab-mercury.png) |
+
+| Blood: impact spatter | Blood: clotted pool, dried spatter | Blood: soaking into cotton |
+| --- | --- | --- |
+| ![spatter](docs/blood-spatter.png) | ![dried](docs/blood-dried.png) | ![fabric](docs/blood-fabric.png) |

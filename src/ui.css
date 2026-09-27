@@ -54,3 +54,6 @@ dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
   .panel.right { display: none; }
   .help { right: 16px; max-width: none; }
 }
+.hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; min-height: 1.4em; }
+.note { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
+.presets button#b-clean { padding: 6px 0; }
