@@ -10,7 +10,7 @@ npx http-server .     # or: python3 -m http.server
 
 Requires WebGL2 with `EXT_color_buffer_float`, which any recent desktop or mobile browser has.
 
-The page has two tabs:
+The app has three tabs:
 
 - **Café** (`index.html`): a cup of coffee on a wooden table.
 - **Lab** (`lab.html`): a glass beaker for testing different liquids — see [The lab](#the-lab).

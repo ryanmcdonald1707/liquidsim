@@ -7,8 +7,9 @@
 
 export const labCommon = /* glsl */ `
 uniform sampler2D uHeight, uDye;
-uniform vec3 uSigA, uSigS, uAddA, uAddS, uF0;
+uniform vec3 uSigA, uSigS, uAddA, uAddS, uF0, uOilA, uOilS;
 uniform float uAddBase, uPool, uIor, uMetal;
+uniform float uHasAdd, uHasOil; // skip the plume noise when nothing is poured in
 uniform vec4 uProfile;   // top weight, top depth scale, (unused), bottom-pool depth scale
 uniform vec4 uColumn;    // falling stream of a sinking additive: x, z, radius, strength
 uniform vec3 uRodA, uRodB;
@@ -21,6 +22,7 @@ vec3 surfN(vec2 xz) { vec4 H = texture(uHeight, xz / (2.0 * R_IN) + 0.5); return
 // a turbulent plume, a pool at the bottom (for sinking additives), a falling
 // column while pouring, and the well-mixed background.
 float addConc(vec3 q) {
+  if (uHasAdd < 0.5) return 0.0;
   float depth = max(SURF_Y - q.y, 0.0), hb = max(q.y - INNER_BOTTOM, 0.0);
   // rotated lattice so value-noise cell faces never line up with the view
   const mat3 ROT = mat3(0.8, 0.36, -0.48, -0.6, 0.48, -0.64, 0.0, 0.8, 0.6);
@@ -39,6 +41,19 @@ float addConc(vec3 q) {
     c += uColumn.w * exp(-dd * dd / (uColumn.z * uColumn.z));
   }
   return clamp(c, 0.0, 1.0);
+}
+
+// Floating oil layer (immiscible, a few mm thick) kept in the dye's .g channel.
+float oilConc(vec3 q) {
+  if (uHasOil < 0.5) return 0.0;
+  float depth = max(SURF_Y + surfH(q.xz) - q.y, 0.0);
+  return texture(uDye, q.xz / (2.0 * R_IN) + 0.5).g * (1.0 - smoothstep(0.0015, 0.0035, depth));
+}
+// Optical properties of the liquid at q: base + mixed-in additive + oil.
+void medium(vec3 q, out vec3 sa, out vec3 ss) {
+  float c = addConc(q), oil = oilConc(q);
+  sa = mix(mix(uSigA, uAddA, c), uOilA, oil);
+  ss = mix(mix(uSigS, uAddS, c), uOilS, oil);
 }
 
 // Transmittance of window light through the beaker towards point p (outside
@@ -151,8 +166,8 @@ vec3 marchLiquid(vec3 p, vec3 d, float jit) {
         L += T * steel(n, -d, mix(bg, inscatter(q, uSigA, uSigS) * 3.0, 0.5));
         return L;
       }
-      float c = addConc(q);
-      vec3 sa = mix(uSigA, uAddA, c), ss = mix(uSigS, uAddS, c);
+      vec3 sa, ss;
+      medium(q, sa, ss);
       vec3 a = exp(-(sa + ss) * ds);
       L += T * (1.0 - a) * inscatter(q, sa, ss);
       T *= a;
@@ -203,7 +218,16 @@ void main() {
   vec3 R = reflect(-V, N);
   if (uMetal > 0.5) {
     vec3 F = uF0 + (1.0 - uF0) * pow(1.0 - max(dot(N, V), 0.0), 5.0);
-    o = vec4(sceneRay(p, R) * F, 1.0);
+    vec3 mirror = sceneRay(p, R) * F;
+    // everything is lighter than mercury: poured liquids float as a film
+    vec4 dy = texture(uDye, vUv);
+    float c = clamp(dy.r * 3.0, 0.0, 1.0) * uHasAdd, oil = clamp(dy.g * 1.5, 0.0, 1.0) * uHasOil;
+    vec3 sa = mix(uAddA, uOilA, oil / max(c + oil, 1e-4)), ss = mix(uAddS, uOilS, oil / max(c + oil, 1e-4));
+    float t = 0.0025 * max(c, oil);
+    vec3 T = exp(-(sa + ss) * t / max(dot(N, V), 0.2));
+    vec3 body = kmAlbedo(sa, ss) * (1.0 - T * T) / PI * (windowLight(N) + ambient(N));
+    float Ff = fresnel(dot(N, V), 0.03) * step(1e-4, t);
+    o = vec4(min(sceneRay(p, R) * Ff + (body + mirror * T * T) * (1.0 - Ff), vec3(40.0)), 1.0);
     return;
   }
   float fr = (uIor - 1.0) / (uIor + 1.0), f0 = fr * fr;

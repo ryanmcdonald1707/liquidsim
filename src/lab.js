@@ -39,8 +39,8 @@ const state = {
   liquid: 'water', additive: 'bluedye', fill: 0.075, gravity: 1.0,
   base: null,            // current base optics (possibly with baked-in additives)
   addBase: 0, addTarget: 0, pool: 0, oil: 0, mixDepth: 0.01,
-  pour: 0, pourPos: [0, 0], pourDur: 1, knockKick: 0,
-  slosh: [], acc: [0, 0], steamOn: false,
+  pour: 0, pourPos: [0, 0], pourDur: 1, poured: false,
+  slosh: [],
 };
 let modal = null, M = 0, Nr = 256, profiles = null, profTex = null;
 let men = { h: 0, lc: 0.0027 };
@@ -58,15 +58,18 @@ const dye = G.pingpong(gl, DRES, DRES, ...RGBA16F, L);
 const dyeF = G.target(gl, DRES, DRES, ...RGBA16F, L);
 const dyeB = G.target(gl, DRES, DRES, ...RGBA16F, L);
 const probeT = G.target(gl, 129, 1, ...RGBA32F, NEAR);
+const probe = G.asyncReader(gl, 129, 1);
 const probeBuf = new Float32Array(129 * 4);
 const wetTex = G.texture(gl, 1, 1, gl.RGBA16F, gl.RGBA, gl.FLOAT, L, new Float32Array([-1e3, 0, 0, 0]));
 
+// an oil film calms the short waves (Marangoni elasticity)
+const oilDamping = () => 0.08 * Math.min(state.oil * 30, 1);
 function buildModal() {
   const liq = LIQUIDS[state.liquid];
   const g = 9.81 * state.gravity;
   modal = new ModalSurface({
     R: D.R_IN, H: state.fill - D.INNER_BOTTOM, g, sigma: liq.sigma, rho: liq.rho, nu: liq.nu, dt: 1 / 240,
-    contactDamping: liq.metal ? 0.12 : 0.22, extraDamping: 0.08 * Math.min(state.oil * 30, 1),
+    contactDamping: liq.metal ? 0.12 : 0.22, extraDamping: oilDamping(),
   });
   M = modal.M; Nr = modal.Nr;
   profiles = new Float32Array(Nr * (M + 1) * 4);
@@ -246,10 +249,11 @@ function pour() {
   state.pourDur = state.pour = add.drops ? 0.35 : 1.4;
   const a = Math.random() * Math.PI * 2, r = Math.random() * 0.012;
   state.pourPos = [r * Math.cos(a), r * Math.sin(a)];
-  if (add.immiscible) state.oil += add.amount;
-  else if (add.buoyancy === 'sink') state.pool += add.amount * 0; // grows while the stream falls
-  else state.addTarget = Math.min(0.6, state.addTarget + add.amount);
-  if (add.immiscible) buildModalKeep();
+  if (add.immiscible) { state.oil += add.amount; modal.setExtraDamping(oilDamping()); updateReadout(); return; }
+  state.poured = true;
+  // on liquid metal everything floats: it stays on top as a film
+  if (!LIQUIDS[state.liquid].metal && add.buoyancy !== 'sink') state.addTarget = Math.min(0.6, state.addTarget + add.amount);
+  // (a sinking additive's pool grows while its stream falls)
 }
 function knock() {
   const a = cam.az + Math.PI + (Math.random() - 0.5);
@@ -272,13 +276,18 @@ function bakeAdditive() {
     }
   }
   state.addBase = state.addTarget = state.pool = 0;
+  state.poured = false;
+  // clear the additive channels but keep any floating oil (.g)
+  gl.colorMask(true, false, true, true);
   clearTargets(dye.read, dye.write);
+  gl.colorMask(true, true, true, true);
 }
 function setLiquid(key) {
   state.liquid = key;
   const liq = LIQUIDS[key];
   state.base = { sigA: liq.sigA.slice(), sigS: liq.sigS.slice() };
   state.addBase = state.addTarget = state.pool = state.oil = 0;
+  state.poured = false;
   clearTargets(vel.read, vel.write, pres.read, pres.write, dye.read, dye.write);
   buildModal();
   syncUI();
@@ -335,7 +344,7 @@ $('b-knock').addEventListener('click', knock);
 $('b-slosh').addEventListener('click', () => { const a = cam.az + Math.PI / 2; sloshPulse(Math.cos(a), -Math.sin(a)); });
 $('b-reset').addEventListener('click', resetSample);
 window.addEventListener('keydown', (e) => {
-  if (e.repeat || e.target.tagName === 'INPUT') return;
+  if (!G.isShortcut(e)) return;
   const k = e.key.toLowerCase();
   if (k === 's') autoStir(); else if (k === 'p') pour(); else if (k === 'k') knock(); else if (k === 'r') resetSample();
   else if (k === 'd') $('b-drop').click();
@@ -433,22 +442,26 @@ function stepPhysics(dt) {
 
   // additive transport
   const slow = Math.min(1, Math.pow(1e-6 / liq.nu, 0.35));
-  const sink = add.buoyancy === 'sink', float = add.buoyancy === 'float';
-  const diffuse = add.immiscible ? 0.03 : Math.max(0.02, 0.22 * slow);
-  const decay = add.immiscible ? 0 : (sink ? 1 / 5 : float ? 1 / 60 : 1 / 16) * Math.max(slow, 0.05);
-  const srcGain = add.immiscible ? 0.6 : sink ? 0.15 : float ? 1.5 : 1;
+  const onMetal = !!liq.metal;
+  const sink = add.buoyancy === 'sink' && !onMetal, float = add.buoyancy === 'float' || onMetal;
+  const diffuse = onMetal ? 0.03 : Math.max(0.02, 0.22 * slow);
+  const decay = onMetal ? 0 : (sink ? 1 / 5 : float ? 1 / 60 : 1 / 16) * Math.max(slow, 0.05);
+  const srcGain = onMetal ? 0.8 : sink ? 0.15 : float ? 1.5 : 1;
   const rate = add.drops ? 3.5 : 2.2;
-  const cap = add.immiscible ? 1 : add.drops ? 0.25 : 0.32;
+  const cap = onMetal ? 1 : add.drops ? 0.25 : 0.32;
+  const oilPouring = pouring && add.immiscible;
   pass(P.advectDye, dyeF, { uVel: vel.read.tex, uSrc: dye.read.tex, uDt: dt, uTexel: dtx });
   pass(P.advectDye, dyeB, { uVel: vel.read.tex, uSrc: dyeF.tex, uDt: -dt, uTexel: dtx });
   pass(P.maccormack, dye.write, {
     uVel: vel.read.tex, uOrig: dye.read.tex, uFwd: dyeF.tex, uBwd: dyeB.tex, uDt: dt, uTime: simTime, uTexel: dtx,
-    uPour: pouring ? [state.pourPos[0], state.pourPos[1], add.drops ? 0.003 : 0.0045, (sink ? 0.4 : rate) * Math.min(1, state.pour * 3)] : [0, 0, 0, 0],
-    uFroth: [0, 0, 0, 0], uDecay: [decay, 0, 0], uDiffuse: diffuse, uSharpen: add.immiscible ? 5 : 0, uCap: cap, uSrcGain: srcGain,
+    uPour: pouring && !oilPouring ? [state.pourPos[0], state.pourPos[1], add.drops ? 0.003 : 0.0045, (sink ? 0.4 : rate) * Math.min(1, state.pour * 3)] : [0, 0, 0, 0],
+    uOilPour: oilPouring ? [state.pourPos[0], state.pourPos[1], 0.005, 2.0 * Math.min(1, state.pour * 3)] : [0, 0, 0, 0],
+    uFoamFromPour: 0,
+    uFroth: [0, 0, 0, 0], uDecay: [decay, 0, 0], uDiffuse: diffuse, uDiffuseG: 0.02, uCap: cap, uSrcGain: srcGain,
   }); dye.swap();
   if (pouring) {
     state.pour -= dt;
-    if (sink) state.pool += add.amount * dt / state.pourDur;
+    if (sink && !add.immiscible) state.pool += add.amount * dt / state.pourDur;
   }
   // the surface layer mixes down into the bulk; stirring dissolves the pool
   const stirring = rod.blend > 0.8 ? Math.hypot(...relV) : 0;
@@ -457,12 +470,13 @@ function stepPhysics(dt) {
     state.pool -= d; state.addTarget = Math.min(0.6, state.addTarget + d);
   }
   state.addBase += (state.addTarget - state.addBase) * (1 - Math.exp(-dt * decay * 2.2));
-  state.mixDepth = Math.min(state.fill, state.mixDepth + dt * 0.004 * slow);
+  state.mixDepth = Math.min(state.fill - D.INNER_BOTTOM, state.mixDepth + dt * 0.004 * slow);
   if (pouring && !sink) state.mixDepth = Math.max(0.012, state.mixDepth * 0.98);
 
   // probe
+  if (probe.poll()) probeBuf.set(probe.out);
   pass(P.probe, probeT, { uVel: vel.read.tex, uProbe: rod.pos });
-  gl.readPixels(0, 0, 129, 1, gl.RGBA, gl.FLOAT, probeBuf);
+  probe.request(probeT);
   rod.fluid = [probeBuf[512], probeBuf[513]];
 
   // radial profiles: waves + vortex dip + meniscus
@@ -521,8 +535,8 @@ function render() {
   camM = cameraMatrices();
   const liq = LIQUIDS[state.liquid], add = ADDITIVES[state.additive];
   const [rA, rB] = rodEnds();
-  const sink = add.buoyancy === 'sink', float = add.buoyancy === 'float';
-  const prof = add.immiscible || float ? [1, 0.003, 0, 0.004] : sink ? [0.4, 0.004, 0, 0.005] : [1, state.mixDepth, 0, 0.005];
+  const sink = add.buoyancy === 'sink' && !liq.metal, float = add.buoyancy === 'float' || liq.metal;
+  const prof = float ? [1, 0.003, 0, 0.004] : sink ? [0.4, 0.004, 0, 0.005] : [1, state.mixDepth, 0, 0.005];
   const poolConc = Math.min(1, state.pool * (state.fill - D.INNER_BOTTOM) / prof[3]);
   const col = sink && state.pour > 0 ? [state.pourPos[0], state.pourPos[1], 0.0035, 0.9] : [0, 0, 0, 0];
   const U = {
@@ -531,6 +545,8 @@ function render() {
     uSigA: state.base.sigA, uSigS: state.base.sigS, uAddA: add.sigA, uAddS: add.sigS, uF0: liq.f0 || [0, 0, 0],
     uAddBase: state.addBase, uPool: poolConc, uIor: liq.ior, uMetal: liq.metal ? 1 : 0,
     uProfile: prof, uColumn: col, uRodA: rA, uRodB: rB, uRodIn: rod.blend > 0.6 ? 1 : 0,
+    uOilA: ADDITIVES.oil.sigA, uOilS: ADDITIVES.oil.sigS, uHasOil: state.oil > 0 ? 1 : 0,
+    uHasAdd: state.poured || state.addBase > 1e-6 || state.pool > 1e-6 ? 1 : 0,
   };
 
   gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);

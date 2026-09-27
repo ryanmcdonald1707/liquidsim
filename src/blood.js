@@ -66,6 +66,7 @@ const flux = G.target(gl, RES, RES, ...RGBA32F, gl.NEAREST);
 const srcT = G.target(gl, RES, RES, ...RGBA16F, gl.NEAREST);
 const vis = G.target(gl, RES, RES, ...RGBA16F, gl.LINEAR);
 const visTop = G.target(gl, RES, RES, ...RGBA16F, gl.LINEAR);
+const reliefT = G.target(gl, RES, RES, ...RGBA32F, gl.NEAREST);
 const MAXD = 512;
 const dropData = new Float32Array(MAXD * 2 * 4);
 const dropTex = G.texture(gl, MAXD, 2, gl.RGBA32F, gl.RGBA, gl.FLOAT, gl.NEAREST);
@@ -77,6 +78,7 @@ const P = {
   stamp: G.program(gl, src(B.stampVS), src(B.stampFS)),
   vis: G.program(gl, src(S.fsVS), src(B.visFS)),
   visTop: G.program(gl, src(S.fsVS), src(B.visTopFS)),
+  relief: G.program(gl, src(S.fsVS), src(B.reliefFS)),
   plane: G.program(gl, src(B.planeVS), src(B.planeFS)),
   drop: G.program(gl, src(B.dropVS), src(B.dropFS)),
   bright: G.program(gl, src(S.fsVS), src(S.brightFS)),
@@ -344,7 +346,7 @@ canvas.addEventListener('pointermove', (e) => {
   }
   const uv = hitSurface(e);
   if (!uv) return;
-  if (sim.tool === 'smear') sim.smear = { from: drag.last, to: uv };
+  if (sim.tool === 'smear') sim.smear = { from: sim.smear ? sim.smear.from : drag.last, to: uv };
   drag.last = uv;
   sim.pointer.uv = uv;
 });
@@ -385,7 +387,10 @@ bindRange('height', (v) => { sim.height = Math.pow(10, v); $('height-v').textCon
 bindRange('oxy', (v) => { sim.oxy = v; $('oxy-v').textContent = v > 0.7 ? 'arterial' : v < 0.3 ? 'venous' : 'mixed'; });
 bindRange('time', (v) => { sim.timeScale = Math.round(Math.pow(10, v)); $('time-v').textContent = `${sim.timeScale}×`; });
 $('b-clean').addEventListener('click', cleanSurface);
-function cleanSurface() { clear(state.read); clear(state.write); clear(flux); sim.drops = []; sim.stamps = []; sim.time = 0; }
+function cleanSurface() {
+  clear(state.read); clear(state.write); clear(flux); sim.drops = []; sim.stamps = []; sim.time = 0;
+  pass(P.relief, reliefT, { uHalf: HALF, uSurface: { int: SURFACES[sim.surface].i }, uRes: [RES, RES] });
+}
 
 function updateReadout() {
   const li = sim.lastImpact;
@@ -435,7 +440,7 @@ function stepSim(dt) {
   const t = tiltR();
   for (let i = 0; i < sub; i++) {
     pass(P.flux, flux, {
-      uS: state.read.tex, uHalf: HALF, uSurface: { int: surf.i }, uDt: h, uCos: Math.cos(t), uSin: Math.sin(t), uRho: BLOOD.rho, uG: G0,
+      uS: state.read.tex, uRelief: reliefT.tex, uHalf: HALF, uSurface: { int: surf.i }, uDt: h, uCos: Math.cos(t), uSin: Math.sin(t), uRho: BLOOD.rho, uG: G0,
       uHpin: surf.hPin * (0.4 + 0.6 * Math.cos(t)), uHres: surf.hRes, uTauY: BLOOD.tauY, uMu0: BLOOD.mu0, uMuInf: BLOOD.muInf, uLam: BLOOD.lambda,
       uN: BLOOD.n, uFront: 0.08, uClotT: BLOOD.clotT,
     });
@@ -454,7 +459,7 @@ function stepSim(dt) {
 function render() {
   camM = cameraMatrices();
   pass(P.vis, vis, { uS: state.read.tex });
-  pass(P.visTop, visTop, { uS: state.read.tex, uHalf: HALF, uSurface: { int: SURFACES[sim.surface].i } });
+  pass(P.visTop, visTop, { uS: state.read.tex, uRelief: reliefT.tex });
   const t = tiltR();
   const U = { uCupPos: [0, 0, 0], uTime: sim.time, uCamPos: camM.eye, uViewProj: camM.vp, uHalf: HALF, uCos: Math.cos(t), uSin: Math.sin(t), uOxy: sim.oxy, uSurface: { int: SURFACES[sim.surface].i } };
 

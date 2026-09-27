@@ -409,7 +409,7 @@ void main() {
   float tb = (p.y - INNER_BOTTOM) / max(-T.y, 1e-3);
   float t = min(tw, tb);
   vec3 q = p + T * t;
-  float depth = max(SURF_Y - q.y, 0.0) + max(p.y - SURF_Y, 0.0) * 0.0;
+  float depth = max(SURF_Y - q.y, 0.0);
   vec3 wallIrr = (windowLight(normalize(vec3(-q.x, 0.0, -q.z))) * interiorShadow(q) + ambient(vec3(-q.x / R_IN, 0.2, -q.z / R_IN)) * 0.7);
   vec3 wall = vec3(0.86, 0.845, 0.815) / PI * wallIrr * exp(-ext * depth * 1.6);
   float Ft = 1.0 - fresnel(dot(N, V), 0.02);
@@ -519,7 +519,6 @@ uniform sampler2D uVel, uCurl, uDye;
 uniform float uDt, uConf;
 uniform vec4 uSpoon;     // x, z, radius, active
 uniform vec2 uSpoonVel;
-uniform vec3 uKick;      // global swirl kick (for auto-stir & knocks)
 void main() {
   vec2 q = toQ(vUv);
   if (length(q) > R_IN) { o = vec4(0.0); return; }
@@ -547,8 +546,6 @@ void main() {
     float k = exp(-(d * d) / (uSpoon.z * uSpoon.z));
     u = mix(u, uSpoonVel, clamp(k * 1.2, 0.0, 1.0) * min(1.0, uDt * 40.0));
   }
-  // solid-body swirl kick
-  u += uKick.z * vec2(-q.y, q.x) * smoothstep(R_IN, R_IN * 0.8, length(q));
   o = vec4(u, 0.0, 1.0);
 }
 `;
@@ -627,7 +624,9 @@ uniform float uDt;
 uniform vec4 uPour;     // x, z, radius, rate
 uniform vec4 uFroth;    // x, z, radius, rate
 uniform vec3 uDecay;    // per-second decay for milk, froth, source
-uniform float uDiffuse, uSharpen, uCap, uSrcGain;
+uniform float uDiffuse, uDiffuseG, uCap, uSrcGain;
+uniform float uFoamFromPour;   // café: a pour whips up some froth into .g
+uniform vec4 uOilPour;         // lab: floating immiscible oil poured into .g
 void main() {
   vec2 q = toQ(vUv);
   if (length(q) > R_IN) { o = vec4(0.0); return; }
@@ -642,9 +641,11 @@ void main() {
   res = clamp(res, min(min(a, b), min(c, d)), max(max(a, b), max(c, d)));
   // molecular + sub-grid turbulent diffusion
   vec4 nb = texture(uFwd, vUv + vec2(ts.x, 0)) + texture(uFwd, vUv - vec2(ts.x, 0)) + texture(uFwd, vUv + vec2(0, ts.y)) + texture(uFwd, vUv - vec2(0, ts.y));
+  // (immiscible layers get almost no diffusion, so MacCormack keeps their
+  // edges crisp without destroying mass)
+  float g0 = res.g;
   res = mix(res, nb * 0.25, uDiffuse);
-  // immiscible liquids: surface tension pulls the dye into sharp-edged lenses
-  if (uSharpen > 0.0) res.r += (smoothstep(0.3, 0.6, res.r / uCap) * uCap - res.r) * min(1.0, uDt * uSharpen);
+  res.g = mix(g0, nb.g * 0.25, uDiffuseG);
   res.rgb *= exp(-uDt * uDecay);
   res.a *= exp(-uDt * 1.4);
   if (uPour.w > 0.0) {
@@ -653,7 +654,12 @@ void main() {
     float n = vnoise(q * 140.0 + uTime * 1.5) * 0.7 + vnoise(q * 400.0 - uTime) * 0.3;
     res.r += uDt * uPour.w * k * (0.3 + 1.2 * n) * 0.6;
     res.a += uDt * uPour.w * k * 2.6 * uSrcGain;
-    res.g += uDt * uPour.w * k * 0.05 * smoothstep(0.6, 0.9, vnoise(q * 1200.0 + uTime * 5.0));
+    res.g += uFoamFromPour * uDt * uPour.w * k * 0.05 * smoothstep(0.6, 0.9, vnoise(q * 1200.0 + uTime * 5.0));
+  }
+  if (uOilPour.w > 0.0) {
+    float dd = length(q - uOilPour.xy);
+    res.g += uDt * uOilPour.w * exp(-dd * dd / (uOilPour.z * uOilPour.z));
+    res.a += uDt * uOilPour.w * exp(-dd * dd / (uOilPour.z * uOilPour.z)) * 1.2; // spreads over the surface
   }
   if (uFroth.w > 0.0) {
     float dd = length(q - uFroth.xy);
@@ -865,7 +871,7 @@ float density(vec3 p) {
 void main() {
   vec3 ro = uCamPos - uCupPos;
   vec3 rd = normalize(vWorld - uCamPos);
-  vec3 inv = 1.0 / rd;
+  vec3 inv = 1.0 / (sign(rd) * max(abs(rd), vec3(1e-6)) + vec3(1e-12));
   vec3 t0 = (uBoxMin - ro) * inv, t1 = (uBoxMax - ro) * inv;
   vec3 tn = min(t0, t1), tf = max(t0, t1);
   float ta = max(max(max(tn.x, tn.y), tn.z), 0.0);
@@ -908,9 +914,11 @@ uniform vec2 uTexel;
 in vec2 vUv;
 out vec4 o;
 void main() {
-  vec3 c = vec3(0.0);
-  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) c += texture(uSrc, vUv + vec2(x, y) * uTexel).rgb;
-  c /= 9.0;
+  // 4 bilinear taps cover the whole 4x4 block of full-res pixels behind each
+  // quarter-res texel, so small highlights can't flicker in and out of bloom
+  vec3 c = texture(uSrc, vUv + vec2(-1.0, -1.0) * uTexel).rgb + texture(uSrc, vUv + vec2(1.0, -1.0) * uTexel).rgb
+         + texture(uSrc, vUv + vec2(-1.0, 1.0) * uTexel).rgb + texture(uSrc, vUv + vec2(1.0, 1.0) * uTexel).rgb;
+  c *= 0.25;
   // never let a stray NaN/Inf pixel get smeared into blocks by the blur
   if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
   c = min(c, vec3(1e4));
@@ -954,7 +962,8 @@ void main() {
   vec2 d = vUv - 0.5;
   c *= 1.0 - 0.35 * dot(d, d) * 2.0;
   c = aces(c);
-  c = pow(c, vec3(1.0 / 2.2));
+  // exact sRGB transfer (a plain 1/2.2 gamma crushes the near-blacks)
+  c = mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
   float n = hash12(vUv * uRes + fract(uTime * 7.1) * 500.0) - 0.5;
   c += n * 0.012;
   o = vec4(c, 1.0);

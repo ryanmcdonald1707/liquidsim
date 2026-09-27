@@ -113,6 +113,7 @@ export class ModalSurface {
     this.k = new Float64Array(n);
     this.omega = new Float64Array(n);
     this.gamma = new Float64Array(n);
+    this.gamma0 = new Float64Array(n);
     this.couple = new Float64Array(n);  // k tanh(kH): pressure -> surface accel
     this.basis = new Float32Array(n * Nr);
     this.dbasis = new Float32Array(n * Nr);
@@ -134,9 +135,9 @@ export class ModalSurface {
       const gFilm = k * Math.sqrt(nu * w / 8);
       const gWall = (Math.sqrt(nu * w / 2) / R) * 0.5 * (1 + mx) / (1 - mx);
       const gBottom = k * Math.sqrt(nu * w / 2) / Math.sinh(Math.min(2 * k * H, 50));
-      const gam = gBulk + gFilm + gWall + gBottom + this.contactDamping + this.extraDamping * k * R;
+      const gam = gBulk + gFilm + gWall + gBottom + this.contactDamping;
       this.mOrd[i] = m; this.isSin[i] = sin; this.k[i] = k;
-      this.omega[i] = w; this.gamma[i] = gam; this.couple[i] = k * th;
+      this.omega[i] = w; this.gamma0[i] = gam; this.gamma[i] = gam + this.extraDamping * k * R; this.couple[i] = k * th;
 
       const key = m + ':' + x;
       let sh = shapeCache.get(key);
@@ -194,6 +195,15 @@ export class ModalSurface {
   }
 
   reset() { this.a.fill(0); this.v.fill(0); }
+
+  // Extra damping growing with wavenumber (e.g. an oil film: Marangoni
+  // elasticity calms the short waves) - cheap, no rebuild of the modes.
+  setExtraDamping(e) {
+    if (e === this.extraDamping) return;
+    this.extraDamping = e;
+    for (let i = 0; i < this.n; i++) this.gamma[i] = this.gamma0[i] + e * this.k[i] * this.R;
+    this.setStep(this.dt);
+  }
 
   // Advance by one fixed substep with the cup accelerating at (ax, az) m/s^2
   // (horizontal, in the cup's x/z plane).

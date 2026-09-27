@@ -61,6 +61,7 @@ const dye = G.pingpong(gl, DRES, DRES, ...RGBA16F, L);
 const dyeF = G.target(gl, DRES, DRES, ...RGBA16F, L);
 const dyeB = G.target(gl, DRES, DRES, ...RGBA16F, L);
 const probeT = G.target(gl, 129, 1, ...RGBA32F, NEAR);
+const probe = G.asyncReader(gl, 129, 1);
 const probeBuf = new Float32Array(129 * 4);
 
 // bubbles
@@ -200,10 +201,10 @@ function pass(prog, dst, uniforms) {
 const cam = { az: 0.55, el: 0.6, dist: 0.36, target: [0, 0.066, 0] };
 const cup = { pos: [0, 0, 0], vel: [0, 0], target: [0, 0], acc: [0, 0] };
 const spoon = {
-  active: false, auto: 0, pos: [0.0, 0.0], vel: [0, 0], blend: 0, faceAng: 0, faceVec: [1, 0],
+  active: false, auto: 0, pos: [0.0, 0.0], vel: [0, 0], blend: 0, faceVec: [1, 0],
   goal: [0, 0], fluid: [0, 0],
 };
-const events = { pour: 0, pourPos: [0, 0], milkBase: 0, milkTarget: 0, knockKick: 0, spawn: null, froth: 0 };
+const events = { pour: 0, pourPos: [0, 0], milkBase: 0, milkTarget: 0, spawn: null };
 let steamOn = true;
 let simTime = 0;
 const wet = { top: new Float32Array(128).fill(D.MEN_H), g: new Float32Array(128), heights: new Float32Array(128) };
@@ -332,7 +333,7 @@ const bind = (id, fn) => document.getElementById(id)?.addEventListener('click', 
 bind('b-stir', autoStir); bind('b-milk', pourMilk); bind('b-sugar', sugar); bind('b-knock', knock); bind('b-reset', reset);
 bind('b-steam', (e) => { steamOn = !steamOn; e.currentTarget.classList.toggle('off', !steamOn); });
 window.addEventListener('keydown', (e) => {
-  if (e.repeat) return;
+  if (!G.isShortcut(e)) return;
   const k = e.key.toLowerCase();
   if (k === 's') autoStir(); else if (k === 'm') pourMilk(); else if (k === 'd') sugar(); else if (k === 'k') knock(); else if (k === 'r') reset();
   else if (k.startsWith('arrow')) {
@@ -410,10 +411,9 @@ function stepPhysics(dt) {
   const vt = [1 / VRES, 1 / VRES], dtx = [1 / DRES, 1 / DRES];
   pass(P.advectVel, vel.write, { uVel: vel.read.tex, uDt: dt, uDamp: Math.exp(-dt / 22), uTexel: vt }); vel.swap();
   pass(P.curl, curlT, { uVel: vel.read.tex, uTexel: vt });
-  const kick = events.knockKick; events.knockKick = 0;
   pass(P.force, vel.write, {
     uVel: vel.read.tex, uCurl: curlT.tex, uDye: dye.read.tex, uDt: dt, uConf: 1.0, uTime: simTime, uTexel: vt,
-    uSpoon: [spoon.pos[0], spoon.pos[1], 0.0055, spoon.blend > 0.8 ? 1 : 0], uSpoonVel: spoon.vel, uKick: [0, 0, kick],
+    uSpoon: [spoon.pos[0], spoon.pos[1], 0.0055, spoon.blend > 0.8 ? 1 : 0], uSpoonVel: spoon.vel,
   }); vel.swap();
   pass(P.div, divT, { uVel: vel.read.tex, uDye: dye.read.tex, uTexel: vt });
   for (let i = 0; i < 36; i++) { pass(P.jacobi, pres.write, { uP: pres.read.tex, uDiv: divT.tex, uTexel: vt }); pres.swap(); }
@@ -428,7 +428,7 @@ function stepPhysics(dt) {
     uVel: vel.read.tex, uOrig: dye.read.tex, uFwd: dyeF.tex, uBwd: dyeB.tex, uDt: dt, uTime: simTime, uTexel: dtx,
     uPour: pouring ? [events.pourPos[0], events.pourPos[1], 0.0045, 2.2 * Math.min(1, events.pour)] : [0, 0, 0, 0],
     uFroth: spoon.blend > 0.8 && stirSpeed > 0.15 ? [spoon.pos[0], spoon.pos[1], 0.004, (stirSpeed - 0.15) * 3] : [0, 0, 0, 0],
-    uDecay: [1 / 16, 1 / 45, 0], uDiffuse: 0.22, uSharpen: 0, uCap: 0.32, uSrcGain: 1,
+    uDecay: [1 / 16, 1 / 45, 0], uDiffuse: 0.22, uDiffuseG: 0.22, uCap: 0.32, uSrcGain: 1, uFoamFromPour: 1,
   }); dye.swap();
   if (pouring) {
     events.pour -= dt;
@@ -443,8 +443,9 @@ function stepPhysics(dt) {
   pass(P.bubbleUpdate, bub.write, { uState: bub.read.tex, uVel: vel.read.tex, uDt: dt, uTime: simTime, uSpawn: spawn || [0, 0, 0, 0] }); bub.swap();
 
   // probe: swirl profile + flow at the spoon
+  if (probe.poll()) probeBuf.set(probe.out);
   pass(P.probe, probeT, { uVel: vel.read.tex, uProbe: spoon.pos });
-  gl.readPixels(0, 0, 129, 1, gl.RGBA, gl.FLOAT, probeBuf);
+  probe.request(probeT);
   spoon.fluid = [probeBuf[128 * 4], probeBuf[128 * 4 + 1]];
 
   buildProfiles(dt);

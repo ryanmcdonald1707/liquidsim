@@ -38,12 +38,12 @@ vec2 cellToP(vec2 fc, vec2 res) { return (fc / res - 0.5) * 2.0 * uHalf; }
 
 // Outflow from each cell towards its 4 neighbours (mm per substep): R, L, U, D.
 export const fluxFS = /* glsl */ `
-uniform sampler2D uS;
+uniform sampler2D uS, uRelief;
 uniform float uDt, uCos, uSin, uRho, uG, uHpin, uHres, uTauY, uMu0, uMuInf, uLam, uN, uFront, uClotT, uTimeScale;
 out vec4 o;
 float phiAt(ivec2 c, float h, vec2 res) {
   vec2 p = cellToP(vec2(c) + 0.5, res);
-  return uRho * uG * (uCos * (h + relief(p)) * 1e-3 + uSin * p.y);
+  return uRho * uG * (uCos * (h + texelFetch(uRelief, c, 0).r) * 1e-3 + uSin * p.y);
 }
 float carreau(float tau) {
   // solve mu(gd) * gd = tau for the Carreau-Yasuda model of whole blood
@@ -241,9 +241,16 @@ void main() {
 }
 `;
 
+// Substrate relief baked once per surface (mm).
+export const reliefFS = /* glsl */ `
+out vec4 o;
+uniform vec2 uRes;
+void main() { o = vec4(relief(cellToP(gl_FragCoord.xy, uRes)), 0.0, 0.0, 1.0); }
+`;
+
 // Smoothed height of the free surface: substrate relief + film (mm).
 export const visTopFS = /* glsl */ `
-uniform sampler2D uS;
+uniform sampler2D uS, uRelief;
 out vec4 o;
 void main() {
   ivec2 c = ivec2(gl_FragCoord.xy);
@@ -253,7 +260,7 @@ void main() {
   for (int j = -2; j <= 2; j++) for (int i = -2; i <= 2; i++) {
     ivec2 cc = clamp(c + ivec2(i, j), ivec2(0), sz - 1);
     float k = exp(-float(i * i + j * j) / 1.3);
-    acc += (texelFetch(uS, cc, 0).r + relief(cellToP(vec2(cc) + 0.5, res))) * k; w += k;
+    acc += (texelFetch(uS, cc, 0).r + texelFetch(uRelief, cc, 0).r) * k; w += k;
   }
   o = vec4(acc / w, 0.0, 0.0, 1.0);
 }

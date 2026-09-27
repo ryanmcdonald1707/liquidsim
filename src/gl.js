@@ -166,3 +166,48 @@ export const mat4 = {
     return inv;
   },
 };
+
+// Asynchronous GPU -> CPU readback of a small float RGBA render target via a
+// pixel-pack buffer and a fence, so the CPU never stalls waiting for the GPU.
+// Results arrive a frame or so late, which is fine for slowly varying data.
+export function asyncReader(gl, w, h) {
+  const bytes = w * h * 16;
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+  gl.bufferData(gl.PIXEL_PACK_BUFFER, bytes, gl.STREAM_READ);
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+  const out = new Float32Array(w * h * 4);
+  let fence = null;
+  return {
+    out,
+    // queue a read of `target` unless one is still in flight
+    request(target) {
+      if (fence) return;
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, target.fbo);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.FLOAT, 0);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+      fence = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      gl.flush();
+    },
+    // copy the finished read into `out`; true when new data arrived
+    poll() {
+      if (!fence) return false;
+      const st = gl.clientWaitSync(fence, 0, 0);
+      if (st === gl.TIMEOUT_EXPIRED || st === gl.WAIT_FAILED) return false;
+      gl.deleteSync(fence);
+      fence = null;
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buf);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, out);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      return true;
+    },
+  };
+}
+
+// Keyboard shortcuts should not fire while typing or with a modifier held
+// (Ctrl/Cmd+R, Ctrl+S, ...).
+export function isShortcut(e) {
+  return !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && !(e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName));
+}
