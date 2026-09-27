@@ -8,41 +8,35 @@
 export const labCommon = /* glsl */ `
 uniform sampler2D uHeight, uDye;
 uniform vec3 uSigA, uSigS, uAddA, uAddS, uF0, uOilA, uOilS;
-uniform float uAddBase, uPool, uIor, uMetal;
+uniform float uAddBase, uIor, uMetal; // uAddBase: total poured fraction (for shadows)
 uniform float uHasAdd, uHasOil; // skip the plume noise when nothing is poured in
 uniform float uOilThick;        // thickness of the floating oil layer (m)
 uniform float uCarb, uBubR, uRise, uBoil; // gas bubbles: density, radius, rise speed
 uniform float uFoamH;           // foam head thickness (m)
 uniform vec3 uFoamCol;
-uniform vec4 uProfile;   // top weight, top depth scale, (unused), bottom-pool depth scale
-uniform vec4 uColumn;    // falling stream of a sinking additive: x, z, radius, strength
+uniform sampler2D uConc3;   // 3D additive field (see mix3d.js)
+uniform float uSurfGain, uSurfLayer; // surface film from the 2D flow: weight, thickness (m)
 uniform vec3 uRodA, uRodB;
 uniform float uRodIn;
 
 float surfH(vec2 xz) { return texture(uHeight, xz / (2.0 * R_IN) + 0.5).r * 0.001; }
 vec3 surfN(vec2 xz) { vec4 H = texture(uHeight, xz / (2.0 * R_IN) + 0.5); return normalize(vec3(-H.g, 1.0, -H.b)); }
 
-// Additive volume fraction in 3D: the simulated surface layer carried down as
-// a turbulent plume, a pool at the bottom (for sinking additives), a falling
-// column while pouring, and the well-mixed background.
+// Additive volume fraction in 3D: the simulated 3D field (1 mm cells,
+// trilinear), the high-resolution surface film from the 2D surface flow, and
+// sub-grid filaments stretched vertically like real plumes.
 float addConc(vec3 q) {
   if (uHasAdd < 0.5) return 0.0;
-  float depth = max(SURF_Y - q.y, 0.0), hb = max(q.y - INNER_BOTTOM, 0.0);
-  // rotated lattice so value-noise cell faces never line up with the view
-  const mat3 ROT = mat3(0.8, 0.36, -0.48, -0.6, 0.48, -0.64, 0.0, 0.8, 0.6);
-  // plumes are stretched vertically and drift downwards
-  vec3 nq = ROT * (q * vec3(95.0, 38.0, 95.0)) + vec3(0.0, uTime * 0.35, 0.0);
-  vec2 warp = (vec2(vnoise3(nq) + 0.5 * vnoise3(nq * 2.3 + 5.0), vnoise3(nq + 17.0) + 0.5 * vnoise3(nq * 2.3 + 23.0)) - 0.75) * depth * 0.45;
-  float c2 = texture(uDye, (q.xz + warp) / (2.0 * R_IN) + 0.5).r;
-  // billowing front: the plume thins out raggedly towards its leading edge
-  float front = depth / uProfile.y;
-  float fil = vnoise3(nq * 1.6 + 3.0) * 0.5 + vnoise3(nq * 3.7) * 0.3 + vnoise3(nq * 8.9 + 11.0) * 0.2;
-  float billow = smoothstep(0.35, 0.75, fil + 0.35 - 0.3 * front);
-  float c = uAddBase + c2 * uProfile.x * exp(-front) * mix(1.0, billow, smoothstep(0.0, 0.01, depth));
-  c += uPool * exp(-hb / uProfile.w);
-  if (uColumn.w > 0.0) {
-    float dd = length(q.xz - uColumn.xy);
-    c += uColumn.w * exp(-dd * dd / (uColumn.z * uColumn.z));
+  float c = sample3(uConc3, q, uGC).x;
+  float depth = max(SURF_Y - q.y, 0.0);
+  float c2 = texture(uDye, q.xz / (2.0 * R_IN) + 0.5).r;
+  c = max(c, c2 * uSurfGain * exp(-depth / uSurfLayer));
+  if (c > 1e-4) {
+    // rotated lattice so value-noise cell faces never line up with the view
+    const mat3 ROT = mat3(0.8, 0.36, -0.48, -0.6, 0.48, -0.64, 0.0, 0.8, 0.6);
+    vec3 nq = ROT * (q * vec3(520.0, 240.0, 520.0)) + vec3(0.0, uTime * 0.3, 0.0);
+    float n = vnoise3(nq) * 0.6 + vnoise3(nq * 2.4 + 5.0) * 0.4;
+    c *= 0.4 + 1.2 * n;
   }
   return clamp(c, 0.0, 1.0);
 }
@@ -91,7 +85,7 @@ vec3 liquidTrans(vec3 p) {
   float L = max(hi - lo, 0.0);
   if (L <= 0.0) return T;
   if (uMetal > 0.5) return T * smoothstep(0.004, 0.0, L);
-  float cm = uAddBase + uPool * 0.3;
+  float cm = uAddBase;
   vec3 sa = mix(uSigA, uAddA, cm), ss = mix(uSigS, uAddS, cm);
   T *= exp(-(sa + 0.85 * ss) * L);
   // the column acts as a cylindrical lens: light piles up near the rim of

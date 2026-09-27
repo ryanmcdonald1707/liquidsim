@@ -42,11 +42,19 @@ Each oscillator is advanced with its exact propagator, so it is unconditionally 
 
 Damping per mode comes from bulk viscosity, the inextensible surfactant film on coffee, the wall and bottom Stokes layers, and contact-line losses. Moving the cup applies the fictitious force in the cup's frame, projected onto the m = 1 modes.
 
+Beyond linear theory:
+- **Waves ride the swirl.** Every mode is Doppler-rotated by the mean angular velocity of the surface flow, `Ω = Σ u_θ r² / Σ r³`, so ripples are carried round a stirred cup.
+- **Stokes crests.** A second-order correction `η₂ = k̄ (η² − ⟨η²⟩)` sharpens crests and flattens troughs as the waves steepen.
+- **Breaking.** When the RMS slope passes about 0.28, the waves lose energy, short ones first (weighted by `(k/k̄)²`), and throw off foam bubbles. The whole field is no longer squashed.
+- **Spilling.** A crest that overtops the rim is lost from the wave field. It leaves coffee running down the outside of the mug in rivulets, with beads at their ends, and a puddle on the saucer on the side where it went over.
+
 **Surface flow** (`src/shaders.js`: `advectVel` … `grad`)
 A 2D stable-fluids solver on the GPU runs inside the circular domain:
 - free-slip walls with vorticity confinement
 - the spoon drags the liquid with it
 - spin-down on a ~20 s timescale
+- a 5-level multigrid V-cycle for the pressure solve, so the flow is properly divergence-free
+- time-step-independent diffusion
 
 The azimuthally averaged swirl is read back and integrated as `dη/dr = u_θ²/(g r)` to produce the vortex dip of stirred coffee. Pouring milk injects a divergent upwelling source, because milk that plunges in resurfaces and spreads, plus turbulence. MacCormack advection keeps the milk clouds sharp.
 
@@ -90,12 +98,23 @@ The wave solver is rebuilt for each liquid, so they genuinely behave differently
 The **gravity** slider (Moon to Jupiter) and **fill** slider rebuild the modes too. The **Physics** panel shows the numbers that follow from the physics: capillary length, meniscus height, slowest ripple speed, Bond number, and slosh frequency and decay.
 
 **Additives:** milk, cream, blue, red and green food dye, ink, espresso, grenadine, honey, and olive oil.
-- Miscible ones plume down in billowing tendrils and slowly mix into the bulk.
-- Grenadine and honey sink as a falling stream and pool at the bottom (a layered drink) until you stir them in.
+- Miscible ones mix in a real 3D flow (`src/mix3d.js`), described below.
+- Grenadine and honey are much denser, so they fall straight through, hit the bottom, and spread out as a layer (a layered drink) until you stir them in.
 - Olive oil floats as an immiscible golden layer that keeps sharp edges and calms the ripples.
 - On mercury, everything floats as a film over the mirror.
 
 Switching additive keeps whatever is already mixed in, and a floating oil layer stays put.
+
+**3D mixing** (`src/mix3d.js`)
+Under the surface, an incompressible Boussinesq flow runs on a 40×40×64 grid. It carries the additive's volume fraction on a finer 80×80×128 grid (1 mm cells). Both 3D grids are stored as tiled 2D texture atlases, so each pass is a single draw.
+- **Pouring.** A pour enters as a jet with its own momentum. Dye goes in as separate drops, each punching in as a blob that rolls up into a sinking vortex ring and trails a thin filament.
+- **Buoyancy.** `g' = g Δρ/ρ` makes denser additives sink and lighter ones rise. Cream floats up, grenadine slumps across the floor as a gravity current, and on mercury everything floats.
+- **Stirring.** The rod drags the liquid along its whole immersed length.
+- **Friction.** Unresolved Ekman and Stewartson layers on the floor and wall spin the swirl down. They also drive the secondary "tea-leaf" circulation: inward along the bottom and up the middle.
+- **Pressure solve.** Red-black SOR, with the free surface as a `p = 0` lid.
+- **Advection.** The additive is advected with MacCormack plus a monotone limiter.
+
+The renderer samples the field trilinearly while it ray marches. It adds the 2D flow's high-resolution surface film and sub-grid filaments on top.
 
 **Rendering:** because the beaker is glass, the liquid is rendered volumetrically by ray marching through it. This gives:
 - Beer–Lambert absorption plus a Kubelka–Munk multiple-scattering source term
