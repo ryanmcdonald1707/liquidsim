@@ -110,8 +110,8 @@ Under the surface, an incompressible Boussinesq flow runs on a 40×40×64 grid. 
 - **Pouring.** A pour enters as a jet with its own momentum. Dye goes in as separate drops, each punching in as a blob that rolls up into a sinking vortex ring and trails a thin filament.
 - **Buoyancy.** `g' = g Δρ/ρ` makes denser additives sink and lighter ones rise. Cream floats up, grenadine slumps across the floor as a gravity current, and on mercury everything floats.
 - **Stirring.** The rod drags the liquid along its whole immersed length.
-- **Friction.** Unresolved Ekman and Stewartson layers on the floor and wall spin the swirl down. They also drive the secondary "tea-leaf" circulation: inward along the bottom and up the middle.
-- **Pressure solve.** Red-black SOR, with the free surface as a `p = 0` lid.
+- **Friction.** Unresolved Ekman and Stewartson layers on the floor and wall spin the swirl down. Floor friction is also what drives the secondary "tea-leaf" circulation (inward along the bottom, up the middle), though at this resolution it is weak.
+- **Pressure solve.** Red-black SOR under a rigid lid. The surface waves are handled by the modal solver.
 - **Advection.** The additive is advected with MacCormack plus a monotone limiter.
 
 The renderer samples the field trilinearly while it ray marches. It adds the 2D flow's high-resolution surface film and sub-grid filaments on top.
