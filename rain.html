@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Rain</title>
+<link rel="stylesheet" href="src/ui.css">
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="status">Gathering clouds…</div>
+<nav class="tabs"><a href="index.html">Café</a><a href="lab.html">Lab</a><a href="blood.html">Blood</a><a href="rain.html" class="on">Rain</a></nav>
+
+<aside class="panel left">
+  <h2>Scene</h2>
+  <div id="scene" class="chips"></div>
+  <p id="hint" class="hint"></p>
+  <h2>Ground</h2>
+  <div id="groundSel" class="chips"></div>
+  <h2>Light</h2>
+  <div id="lightSel" class="chips"></div>
+  <h2>Rain <span id="rain-v" class="val"></span></h2>
+  <input id="rain" type="range" min="-1" max="2.2" step="0.01" value="1.08">
+  <h2>Wind <span id="wind-v" class="val"></span></h2>
+  <input id="wind" type="range" min="0" max="15" step="0.5" value="2">
+  <h2>Puddles <span id="puddle-v" class="val"></span></h2>
+  <input id="puddle" type="range" min="0" max="1" step="0.01" value="0.55">
+</aside>
+
+<aside class="panel right">
+  <h2>Rain physics</h2>
+  <dl id="readout"></dl>
+  <p class="note">Drop sizes follow the Marshall–Palmer distribution and fall at their measured terminal speeds (Gunn &amp; Kinzer). Heavier rain has bigger, faster drops and cuts visibility. Keys: <b>W</b> window, <b>N</b> light, <b>C</b> clear glass.</p>
+</aside>
+
+<div id="fps"></div>
+<script type="module" src="src/rain.js"></script>
+</body>
+</html>

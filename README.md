@@ -10,11 +10,12 @@ npx http-server .     # or: python3 -m http.server
 
 Requires WebGL2 with `EXT_color_buffer_float`, which any recent desktop or mobile browser has.
 
-The app has three tabs:
+The app has four tabs:
 
 - **Café** (`index.html`): a cup of coffee on a wooden table.
 - **Lab** (`lab.html`): a glass beaker for testing different liquids — see [The lab](#the-lab).
 - **Blood** (`blood.html`): blood on surfaces, for games — see [Blood mechanics](#blood-mechanics).
+- **Rain** (`rain.html`): a street in the rain, and the same street through a rainy window — see [Rain](#rain).
 
 ## Controls
 
@@ -132,6 +133,23 @@ A 30 × 30 cm patch of surface you can tilt from floor to wall. It's built for s
 - **Clotting and drying:** blood clots over minutes, stops flowing, and loses its mirror gloss. Clot retraction leaves a straw-coloured serum rim. Evaporation, fastest at thin edges, leaves a coffee-ring deposit that browns as haemoglobin oxidises, and thick crusts crack. Use the time-scale slider to fast-forward.
 - **Optics:** haemoglobin absorption and red-cell scattering are combined with two-layer Kubelka–Munk over the substrate, so thin smears are lighter red and thick pools are deep crimson. Arterial (oxygenated) blood is brighter than venous blood, and the wet film has gloss and a meniscus bulge.
 
+## Rain
+
+Two scenes, switched with the Scene buttons or `W`:
+- **Street:** a road in the rain. Look around by dragging and move with the scroll wheel.
+- **Window:** looking out through a rain-covered pane. Drag to wipe the glass.
+
+**Controls:** rain rate (drizzle to downpour), wind, puddle level, asphalt or cobblestones, and overcast day, dusk or night (`N`).
+
+**What's simulated:**
+- **Drop sizes and fall speeds:** drops follow the Marshall–Palmer size distribution for the chosen rain rate, and each falls at its measured terminal velocity (Gunn & Kinzer). The side panel shows the median drop size, its fall speed, drops per m³, impacts per m² per second, and visibility.
+- **Falling rain:** thousands of drops are drawn as motion-blurred streaks, each exactly one frame's travel long. Drops thinner than a pixel keep their true brightness by scaling their opacity. They look like the diffuse sky light they gather as tiny lenses, and sparkle with forward-scattered light near streetlamps.
+- **Splashes:** every impact near the camera throws a crown of fine droplets.
+- **Puddles:** water fills the low spots of the road's real relief, including the gaps between cobbles. Raindrops set off ripple rings on the puddles: wave packets expanding at the capillary–gravity group speed (~20 cm/s), a few millimetres of wavelength, decaying as they spread.
+- **Wet surfaces:** rain soaks the road, which darkens porous surfaces and turns them glossy, then dries slowly after the rain stops. Streetlamps are reflected by microfacet (GGX) specular, so their reflections stretch into long streaks on the wet asphalt and break into glitter on rippling puddles.
+- **Atmosphere:** rain and haze scatter lamplight with the closed-form single-scattering solution for a point light, which gives the glowing halos. Visibility falls with rain rate, so distant buildings fade.
+- **The window:** drops hit the glass (more with wind), bead up and merge, and stay pinned until they grow past about 2 mm radius. Then they slide down in jerky zig-zags, swallowing the beads in their path and leaving trails of small droplets. Each drop is a lens showing a sharp, inverted image of the defocused street behind, with dark total-internal-reflection rims and glints.
+
 ## Screenshots
 
 | Stirring | Milk | Droplet |
@@ -149,3 +167,7 @@ A 30 × 30 cm patch of surface you can tilt from floor to wall. It's built for s
 | Blood: impact spatter | Blood: clotted pool, dried spatter | Blood: soaking into cotton |
 | --- | --- | --- |
 | ![spatter](docs/blood-spatter.png) | ![dried](docs/blood-dried.png) | ![fabric](docs/blood-fabric.png) |
+
+| Rain: night street | Rain: overcast day | Rain: on the window |
+| --- | --- | --- |
+| ![night](docs/rain-night.png) | ![day](docs/rain-day.png) | ![window](docs/rain-window.png) |
