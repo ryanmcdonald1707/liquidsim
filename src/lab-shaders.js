@@ -15,6 +15,7 @@ uniform float uCarb, uBubR, uRise, uBoil; // gas bubbles: density, radius, rise 
 uniform float uFoamH;           // foam head thickness (m)
 uniform vec3 uFoamCol;
 uniform sampler2D uConc3, uVel3; // 3D additive field and flow (see mix3d.js)
+uniform sampler2D uLightA, uLightB; // mean additive fraction along six light paths
 uniform float uDn;          // refractive index of the additive minus the base's
 uniform float uSurfGain, uSurfLayer; // surface film from the 2D flow: weight, thickness (m)
 uniform vec3 uRodA, uRodB;
@@ -173,12 +174,14 @@ vec3 inscatter(vec3 q, vec3 sa, vec3 ss) {
   // milk and go green). Direct light comes from the window; diffuse light
   // arrives from wherever the liquid around q is thinnest: up and sideways.
   vec3 lit = vec3(0.0), amb = vec3(0.0);
+  vec4 lvA = vec4(0.0), lvB = vec4(0.0);
+  if (uHasAdd > 0.5) { lvA = sample3(uLightA, q, uGV); lvB = sample3(uLightB, q, uGV); }
   for (int k = 0; k < 6; k++) {
-    vec3 dir = k == 0 ? LW : k == 1 ? vec3(0.0, 1.0, 0.0) : vec3(cos(float(k) * 1.5708), 0.0, sin(float(k) * 1.5708));
+    vec3 dir = k == 0 ? LW : k == 1 ? vec3(0.0, 1.0, 0.0) : k == 2 ? vec3(1.0, 0.0, 0.0) : k == 3 ? vec3(-1.0, 0.0, 0.0) : k == 4 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 0.0, -1.0);
     float len = k == 0 ? tl : k == 1 ? max(top - q.y, 0.0) : max(wallDist(q, dir), 0.0);
-    int ns = k == 0 ? 4 : 3;
+    // the mean additive fraction along this path, from the light volume
     float c = 0.0;
-    if (uHasAdd > 0.5) for (int i = 0; i < 4; i++) { if (i >= ns) break; c += sample3(uConc3, q + dir * len * (float(i) + 0.5) / float(ns), uGC).x / float(ns); }
+    if (uHasAdd > 0.5) c = max(k < 3 ? lvA[k] : lvB[k - 3], 0.0);
     // scattering lengthens the path light takes, so absorption bites harder:
     // in thick media by the diffusion factor sqrt(3 mus'/mua), in thin ones
     // only by ~(1 + mus' L / 2). Uses the reduced scattering coefficient:
@@ -260,13 +263,18 @@ vec3 marchLiquid(vec3 p, vec3 d, float jit) {
       // towards denser-index liquid (dn/ds = grad n), the shimmer you see
       // when syrup or milk goes into water
       if (uDn != 0.0 && uHasAdd > 0.5 && sample3(uConc3, q, uGC).x > 3e-4) {
-        const float e = 0.0012;
+        const float e = 0.0016;
         vec3 gc = vec3(
           sample3(uConc3, q + vec3(e, 0, 0), uGC).x - sample3(uConc3, q - vec3(e, 0, 0), uGC).x,
           sample3(uConc3, q + vec3(0, e, 0), uGC).x - sample3(uConc3, q - vec3(0, e, 0), uGC).x,
           sample3(uConc3, q + vec3(0, 0, e), uGC).x - sample3(uConc3, q - vec3(0, 0, e), uGC).x) / (2.0 * e);
         vec3 gn = uDn * gc / uIor;
-        dc = normalize(dc + (gn - dc * dot(gn, dc)) * ds);
+        // (capped per step: a coarse step across a sharp honey/water edge
+        // would otherwise over-bend and break the image into jagged patches)
+        vec3 bend = (gn - dc * dot(gn, dc)) * ds;
+        float bl = length(bend);
+        if (bl > 0.04) bend *= 0.04 / bl;
+        dc = normalize(dc + bend);
         off += (dc - d) * ds;
         float lo = length(off);
         if (lo > 0.006) off *= 0.006 / lo;
@@ -477,13 +485,16 @@ void main() {
 // The falling stream while pouring.
 export const streamFS = /* glsl */ `
 uniform vec3 uStreamA, uStreamS;
+uniform float uStreamR, uStreamIor;
 in vec3 vLocal, vWorld, vN; in vec2 vUv;
 out vec4 o;
 void main() {
   vec3 n = normalize(vN);
   vec3 v = normalize(uCamPos - vWorld);
-  float F = fresnel(dot(n, v), 0.03);
-  float thick = 0.006 * max(dot(n, v), 0.25);
+  float fr = (uStreamIor - 1.0) / (uStreamIor + 1.0);
+  float F = fresnel(dot(n, v), fr * fr);
+  // the path through a round stream is the chord 2 r cos(theta)
+  float thick = 2.0 * uStreamR * max(dot(n, v), 0.2);
   vec3 alb = kmAlbedo(uStreamA, uStreamS);
   vec3 T = exp(-(uStreamA + uStreamS) * thick);
   vec3 body = alb / PI * (windowLight(n) + ambient(n)) * (1.0 - T) + sceneRay(vWorld, refract(-v, n, 0.75)) * T;

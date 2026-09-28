@@ -540,10 +540,17 @@ function stepPhysics(dt) {
     // a drop is a compact blob; a stream penetrates a few centimetres
     const zs = add.drops ? 1.2 : 5;
     const vBlob = Math.PI ** 1.5 * zs * r ** 3;
-    const jet = { x: state.pourPos[0], z: state.pourPos[1], r, zs, mix: add.drops ? 0 : 0.3, speed: add.drops ? 0.12 : 0.4, rate: add.amount * vLiq / (tIn * vBlob) };
+    // a stream falling ~15 cm hits at sqrt(2 g h) ~ 1.7 m/s: its Reynolds
+    // number decides between a billowing turbulent plume (milk) and a
+    // coherent laminar rope (honey)
+    const Re = Math.sqrt(2 * g * 0.15) * 2 * r / (add.nu || 1e-6);
+    const turb = add.drops ? 0 : Math.min(1, Math.max(0, (Re - 800) / 2200));
+    const jet = { x: state.pourPos[0], z: state.pourPos[1], r, zs, mix: 0.3 * turb, speed: add.drops ? 0.12 : 0.4, rate: add.amount * vLiq / (tIn * vBlob) };
     mixer.step({
-      dt, surfY: state.fill, nu: liq.nu, gp, time: simTime,
-      diff: perFrame(0.004 * slow + 0.02 * stirring, dt),
+      dt, surfY: state.fill, nu: liq.nu, nuAdd: add.immiscible ? liq.nu : add.nu || liq.nu, gp, time: simTime,
+      light: state.poured,
+      // (sugars and fats in viscous additives diffuse slowly: sharper edges)
+      diff: perFrame((0.004 * slow + 0.02 * stirring) * Math.min(1, Math.pow(1e-6 / (add.nu || 1e-6), 0.25)), dt),
       rod: { a: rA, b: rB, vel: rod.vel, r: D.ROD_R, on: rod.blend > 0.8 },
       // dye falls as separate drops; a pour is a continuous stream
       jet: pouring && !add.immiscible && (!add.drops || (state.pourDur - state.pour) % 0.11 < 0.025) ? jet : null,
@@ -625,7 +632,7 @@ function render() {
     uHeight: heightT.tex, uDye: dye.read.tex,
     uSigA: state.base.sigA, uSigS: state.base.sigS, uAddA: add.sigA, uAddS: add.sigS, uF0: liq.f0 || [0, 0, 0],
     uAddBase: state.addTotal, uIor: liq.ior, uMetal: liq.metal ? 1 : 0,
-    uConc3: mixer.conc.read.tex, uGC: MX.CG, uSurfGain: sink ? 0.3 : float ? 1 : 0.6, uSurfLayer: float ? 0.002 : 0.0007, uVel3: mixer.vel.read.tex,
+    uConc3: mixer.conc.read.tex, uGC: MX.CG, uSurfGain: sink ? 0.3 : float ? 1 : 0.6, uSurfLayer: float ? 0.002 : 0.0007, uVel3: mixer.vel.read.tex, uLightA: mixer.lightA.tex, uLightB: mixer.lightB.tex,
     uDn: liq.metal || add.immiscible ? 0 : (add.ior || liq.ior) - liq.ior, uRodA: rA, uRodB: rB, uRodIn: rod.blend > 0.6 ? 1 : 0,
     uOilA: ADDITIVES.oil.sigA, uOilS: ADDITIVES.oil.sigS, uHasOil: state.oil > 0 ? 1 : 0,
     uHasAdd: state.poured ? 1 : 0,
@@ -655,7 +662,7 @@ function render() {
   if (state.pour > 0) {
     const p = state.pourPos, wob = 0.0006 * Math.sin(simTime * 40);
     const r = add.drops ? 0.0012 : sink ? 0.0028 : 0.0022;
-    G.use(gl, P.stream, { ...U, uModel: segMatrix([p[0] + wob, state.fill - 0.002, p[1]], [p[0], state.fill + 0.25, p[1]], r), uStreamA: add.sigA, uStreamS: add.sigS });
+    G.use(gl, P.stream, { ...U, uModel: segMatrix([p[0] + wob, state.fill - 0.002, p[1]], [p[0], state.fill + 0.25, p[1]], r), uStreamA: add.sigA, uStreamS: add.sigS, uStreamR: r, uStreamIor: add.ior || 1.34 });
     meshes.stream.draw();
   }
   gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);

@@ -78,7 +78,7 @@ export const LIQUIDS = {
   },
   honey: {
     name: 'Honey', swatch: '#c9820e', rho: 1420, nu: 7.0e-3, sigma: 0.055, ior: 1.49, theta: 30,
-    sigA: [4, 28, 150], sigS: [3, 3, 3],
+    sigA: [8, 42, 200], sigS: [3, 3, 3],
     note: '~7000x water\'s viscosity: every mode is over-damped, so the surface creeps instead of rippling.',
   },
   maple: {
@@ -121,17 +121,19 @@ export const LIQUIDS = {
 
 // Things you can pour in. amount = volume fraction added per pour.
 // ior: refractive index (index differences show as schlieren while mixing).
+// nu: kinematic viscosity (m^2/s): sets whether a pour is a turbulent plume or a
+// laminar rope, and how the mixture flows.
 // buoyancy: 'float' stays in a thin top layer, 'sink' falls and pools,
 // 'mix' plumes down and spreads. immiscible liquids keep sharp edges.
 export const ADDITIVES = {
-  milk: { name: 'Milk', swatch: '#f2eee4', ior: 1.35, sigA: [0.8, 1.3, 2.8], sigS: [12000, 12200, 12500], amount: 0.045, rho: 1030, buoyancy: 'mix' },
-  cream: { name: 'Cream', swatch: '#f6ecd2', ior: 1.352, sigA: [0.6, 1.4, 6], sigS: [26000, 26000, 25500], amount: 0.035, rho: 1000, buoyancy: 'float', miscible: true },
-  bluedye: { name: 'Blue dye', swatch: '#1d4fd8', ior: 1.336, sigA: [52000, 21000, 900], sigS: [0, 0, 0], amount: 0.0012, rho: 1010, buoyancy: 'mix', drops: true },
-  reddye: { name: 'Red dye', swatch: '#d61f35', ior: 1.336, sigA: [600, 42000, 23000], sigS: [0, 0, 0], amount: 0.0012, rho: 1010, buoyancy: 'mix', drops: true },
-  greendye: { name: 'Green dye', swatch: '#1e9e4a', ior: 1.336, sigA: [48000, 900, 30000], sigS: [0, 0, 0], amount: 0.0012, rho: 1010, buoyancy: 'mix', drops: true },
-  ink: { name: 'Ink', swatch: '#141620', ior: 1.34, sigA: [60000, 58000, 50000], sigS: [300, 300, 300], amount: 0.0015, rho: 1020, buoyancy: 'mix', drops: true },
-  espresso: { name: 'Espresso', swatch: '#3b1d0c', ior: 1.343, sigA: [240, 620, 1300], sigS: [12, 12, 12], amount: 0.05, rho: 1010, buoyancy: 'mix' },
-  syrup: { name: 'Grenadine', swatch: '#b0102a', ior: 1.44, sigA: [40, 2600, 1500], sigS: [0.2, 0.2, 0.2], amount: 0.04, rho: 1300, buoyancy: 'sink', viscous: true },
-  honey: { name: 'Honey', swatch: '#c9820e', ior: 1.49, sigA: [4, 28, 150], sigS: [3, 3, 3], amount: 0.05, rho: 1420, buoyancy: 'sink', viscous: true },
-  oil: { name: 'Olive oil', swatch: '#b8a624', ior: 1.47, sigA: [10, 5, 110], sigS: [0.2, 0.2, 0.2], amount: 0.06, rho: 915, buoyancy: 'float', immiscible: true },
+  milk: { name: 'Milk', swatch: '#f2eee4', ior: 1.35, nu: 2.0e-6, sigA: [0.8, 1.3, 2.8], sigS: [12000, 12200, 12500], amount: 0.045, rho: 1030, buoyancy: 'mix' },
+  cream: { name: 'Cream', swatch: '#f6ecd2', ior: 1.352, nu: 1.5e-5, sigA: [0.6, 1.4, 6], sigS: [26000, 26000, 25500], amount: 0.035, rho: 994, buoyancy: 'float', miscible: true },
+  bluedye: { name: 'Blue dye', swatch: '#1d4fd8', ior: 1.336, nu: 1.0e-6, sigA: [52000, 21000, 900], sigS: [0, 0, 0], amount: 0.0012, rho: 1010, buoyancy: 'mix', drops: true },
+  reddye: { name: 'Red dye', swatch: '#d61f35', ior: 1.336, nu: 1.0e-6, sigA: [600, 42000, 23000], sigS: [0, 0, 0], amount: 0.0012, rho: 1010, buoyancy: 'mix', drops: true },
+  greendye: { name: 'Green dye', swatch: '#1e9e4a', ior: 1.336, nu: 1.0e-6, sigA: [48000, 900, 30000], sigS: [0, 0, 0], amount: 0.0012, rho: 1010, buoyancy: 'mix', drops: true },
+  ink: { name: 'Ink', swatch: '#141620', ior: 1.34, nu: 2.0e-6, sigA: [60000, 58000, 50000], sigS: [300, 300, 300], amount: 0.0015, rho: 1020, buoyancy: 'mix', drops: true },
+  espresso: { name: 'Espresso', swatch: '#3b1d0c', ior: 1.343, nu: 1.0e-6, sigA: [240, 620, 1300], sigS: [12, 12, 12], amount: 0.05, rho: 1010, buoyancy: 'mix' },
+  syrup: { name: 'Grenadine', swatch: '#b0102a', ior: 1.44, nu: 8.0e-6, sigA: [40, 2600, 1500], sigS: [0.2, 0.2, 0.2], amount: 0.04, rho: 1300, buoyancy: 'sink', viscous: true },
+  honey: { name: 'Honey', swatch: '#c9820e', ior: 1.49, nu: 7.0e-3, sigA: [8, 42, 200], sigS: [3, 3, 3], amount: 0.05, rho: 1420, buoyancy: 'sink', viscous: true },
+  oil: { name: 'Olive oil', swatch: '#b8a624', ior: 1.47, nu: 9.0e-5, sigA: [10, 5, 110], sigS: [0.2, 0.2, 0.2], amount: 0.06, rho: 915, buoyancy: 'float', immiscible: true },
 };

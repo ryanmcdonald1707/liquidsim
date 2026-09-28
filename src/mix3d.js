@@ -62,7 +62,8 @@ out vec4 o;
 // velocity: advection + forces
 export const vAdvectFS = head + grid3 + /* glsl */ `
 uniform sampler2D uVel3, uConc3;
-uniform float uDt, uGp, uVisc, uDrag, uCreep;
+uniform float uDt, uGp, uDrag;
+uniform vec2 uLogNu;      // ln(viscosity) of the base liquid and of the additive
 uniform vec3 uRodA, uRodB;
 uniform vec4 uRod;        // vx, vz, radius, active
 uniform vec4 uJet;        // x, z, radius, downward speed (0 = off)
@@ -82,9 +83,13 @@ void main() {
     ivec3 q = c + e;
     nb += solid(q, uG) ? vec3(0.0) : air(q, uG) ? u0 : fetch3(uVel3, q, uG).xyz;
   }
-  u = mix(u, nb / 6.0, uVisc);
+  // the mixture's viscosity follows its composition (log-linear, as for
+  // sugar solutions): a honey blob in water creeps as a lump
+  float cc = sample3(uConc3, p, uGC).x;
+  float nu = exp(mix(uLogNu.x, uLogNu.y, cc));
+  u = mix(u, nb / 6.0, min(0.95, 1.0 - exp(-6.0 * nu * uDt / (h.x * h.x))));
   // buoyancy of the additive
-  u.y -= uGp * sample3(uConc3, p, uGC).x * uDt;
+  u.y -= uGp * cc * uDt;
   // the rod: a cylinder dragging the liquid with it
   if (uRod.w > 0.5) {
     vec3 ab = uRodB - uRodA;
@@ -98,7 +103,8 @@ void main() {
   // is conserved, so the centreline speed falls as 1/width)
   if (uJet.w > 0.0) {
     float depth = SURF_Y - p.y, r0 = max(uJet.z, 0.7 * h.x);
-    float b = r0 + 0.2 * depth, wc = uJet.w * r0 / b;
+    // (a laminar rope - honey - keeps its width)
+    float b = r0 + 0.2 * depth * min(uJetMix / 0.3, 1.0), wc = uJet.w * r0 / b;
     float k = exp(-pow(length(p.xz - uJet.xy) / b, 2.0)) * smoothstep(0.0, 0.002, depth);
     // (a drop only punches ~1 cm in; the vortex ring carries it from there)
     if (uJetMix <= 0.0) k *= exp(-depth / 0.006);
@@ -107,13 +113,14 @@ void main() {
     // jet; the pressure projection makes the forcing divergence-free
     vec3 nq = (p + vec3(0.0, uTime * wc * 0.7, 0.0)) / b * 1.5;
     vec3 e = vec3(vnoise3(nq), vnoise3(nq + 17.3), vnoise3(nq + 31.7)) - 0.5;
-    u += e * k * 1.2 * wc * wc / b * uDt * step(0.0001, uJetMix);
+    u += e * k * 1.2 * wc * wc / b * uDt * min(uJetMix / 0.3, 1.0);
   }
   // floor and wall friction (unresolved Ekman / Stewartson layers)
   float wall = step(R_IN - 1.5 * h.x, length(p.xz));
   if (c.y == 0 || wall > 0.5) u.xz *= exp(-uDt * uDrag * (1.0 + length(u.xz) * 20.0));
   if (wall > 0.5) u.y *= exp(-uDt * uDrag);
-  u *= exp(-uDt * uCreep);
+  // creeping flow: slow viscous decay of the largest eddies
+  u *= exp(-uDt * nu * 3000.0);
   // (safety net: nothing in a beaker moves faster than this)
   float sp = length(u);
   if (sp > 0.6) u *= 0.6 / sp;
@@ -248,6 +255,40 @@ void main() {
 }
 `;
 
+// Light volume: for every velocity-grid cell, the mean additive fraction
+// along the six paths light takes to reach it (to the window, straight up,
+// and four ways sideways to the glass), from 12 trilinear samples each. The
+// renderer applies the exact path lengths analytically; precomputing the
+// averages here gives smooth shadows without per-pixel sampling noise.
+export const lightFS = head + grid3 + /* glsl */ `
+uniform sampler2D uConc3;
+uniform int uSet;          // 0: window, up, +x   1: -x, +z, -z
+float toWall(vec3 p, vec3 d) {
+  float a = dot(d.xz, d.xz);
+  if (a < 1e-6) return 1e9;
+  float b = dot(p.xz, d.xz), c = dot(p.xz, p.xz) - R_IN * R_IN;
+  return (-b + sqrt(max(b * b - a * c, 0.0))) / a;
+}
+float pathMean(vec3 p, vec3 d) {
+  float len = toWall(p, d);
+  if (d.y > 0.0) len = min(len, (SURF_Y - p.y) / d.y);
+  len = max(len, 0.0);
+  float c = 0.0;
+  for (int i = 0; i < 12; i++) c += sample3(uConc3, p + d * len * (float(i) + 0.5) / 12.0, uGC).x;
+  return c / 12.0;
+}
+void main() {
+  ivec3 c = cellOf(gl_FragCoord.xy, uG);
+  vec3 p = cellPos(c, uG);
+  // keep the ghost cells meaningful for trilinear lookups near the walls
+  float r = length(p.xz);
+  if (r > R_IN * 0.97) p.xz *= R_IN * 0.97 / r;
+  p.y = min(p.y, SURF_Y - 0.0005);
+  if (uSet == 0) o = vec4(pathMean(p, LW), pathMean(p, vec3(0.0, 1.0, 0.0)), pathMean(p, vec3(1.0, 0.0, 0.0)), 0.0);
+  else o = vec4(pathMean(p, vec3(-1.0, 0.0, 0.0)), pathMean(p, vec3(0.0, 0.0, 1.0)), pathMean(p, vec3(0.0, 0.0, -1.0)), 0.0);
+}
+`;
+
 export function createMixer(gl, pass, program) {
   const F = [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT];
   const size = (g) => [g[0] * g[2], g[0] * Math.ceil(g[1] / g[2])];
@@ -257,21 +298,22 @@ export function createMixer(gl, pass, program) {
   const conc = G.pingpong(gl, ...size(CG), ...F, gl.LINEAR);
   const cF = G.target(gl, ...size(CG), ...F, gl.LINEAR);
   const cB = G.target(gl, ...size(CG), ...F, gl.LINEAR);
+  const lightA = G.target(gl, ...size(VG), ...F, gl.LINEAR);
+  const lightB = G.target(gl, ...size(VG), ...F, gl.LINEAR);
   const P = {
     vAdvect: program(vAdvectFS), vDiv: program(vDivFS), vSor: program(vSorFS), vProject: program(vProjectFS),
-    cAdvect: program(cAdvectFS), cMac: program(cMacFS),
+    cAdvect: program(cAdvectFS), cMac: program(cMacFS), light: program(lightFS),
   };
   const clear = (...ts) => {
     for (const t of ts) { gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); }
   };
-  const reset = () => clear(vel.read, vel.write, prs.read, prs.write, conc.read, conc.write, cF, cB);
-  const clearConc = () => clear(conc.read, conc.write, cF, cB);
+  const reset = () => clear(vel.read, vel.write, prs.read, prs.write, conc.read, conc.write, cF, cB, lightA, lightB);
+  const clearConc = () => clear(conc.read, conc.write, cF, cB, lightA, lightB);
   reset();
-  const h = (2 * 0.040) / VG[0];
   const omega = 2 / (1 + Math.sin(Math.PI / VG[0]));
 
   return {
-    conc, vel, reset, clearConc,
+    conc, vel, lightA, lightB, reset, clearConc,
     // mean additive fraction over the liquid (a GPU readback: only on demand)
     meanConc(surfY) {
       const [w, hh] = size(CG), n = CG[0], buf = new Float32Array(w * hh * 4);
@@ -289,18 +331,17 @@ export function createMixer(gl, pass, program) {
       }
       return k ? s / k : 0;
     },
-    // opts: dt, surfY, nu, gp (buoyancy, m/s^2 per unit fraction), rod{a,b,vel,r,on},
+    // opts: dt, surfY, nu (base), nuAdd (additive), light (update the light volume), gp (buoyancy, m/s^2 per unit fraction), rod{a,b,vel,r,on},
     // jet{x,z,r,speed,rate} or null, time
     step(o) {
       const { dt } = o;
       const grids = { uGV: VG, uGC: CG, uSurfY: o.surfY };
-      const visc = Math.min(0.9, 1 - Math.exp(-6 * o.nu * dt / (h * h)));
-      // floor friction ~ sqrt(nu * Omega) / dz; creeping flow for syrups
+      // floor friction ~ sqrt(nu * Omega) / dz
       const drag = Math.min(40, Math.sqrt(o.nu * 20) / (0.12 / VG[1]));
-      const creep = o.nu * (Math.PI / 0.04) ** 2 * 0.5;
       const rod = o.rod, jet = o.jet;
       pass(P.vAdvect, vel.write, {
-        ...grids, uG: VG, uVel3: vel.read.tex, uConc3: conc.read.tex, uDt: dt, uGp: o.gp, uVisc: visc, uDrag: drag, uCreep: creep,
+        ...grids, uG: VG, uVel3: vel.read.tex, uConc3: conc.read.tex, uDt: dt, uGp: o.gp, uDrag: drag,
+        uLogNu: [Math.log(o.nu), Math.log(o.nuAdd || o.nu)],
         uRodA: rod.a, uRodB: rod.b, uRod: [rod.vel[0], rod.vel[1], rod.r, rod.on ? 1 : 0],
         uJet: jet ? [jet.x, jet.z, jet.r, jet.speed] : [0, 0, 0, 0], uTime: o.time, uJetMix: jet ? jet.mix || 0 : 0,
       }); vel.swap();
@@ -319,6 +360,10 @@ export function createMixer(gl, pass, program) {
         ...grids, uG: CG, uVel3: vel.read.tex, uOrig3: conc.read.tex, uFwd3: cF.tex, uBwd3: cB.tex, uDt: dt,
         uDiff: o.diff, uTime: o.time, uJet: jet ? [jet.x, jet.z, jet.r, jet.rate] : [0, 0, 0, 0], uJetZ: jet ? jet.zs : 1, uJetMix: jet ? jet.mix || 0 : 0,
       }); conc.swap();
+      if (o.light) {
+        pass(P.light, lightA, { ...grids, uG: VG, uConc3: conc.read.tex, uSet: { int: 0 } });
+        pass(P.light, lightB, { ...grids, uG: VG, uConc3: conc.read.tex, uSet: { int: 1 } });
+      }
     },
   };
 }

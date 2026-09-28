@@ -109,6 +109,8 @@ Switching additive keeps whatever is already mixed in, and a floating oil layer 
 Under the surface, an incompressible Boussinesq flow runs on a 40×40×64 grid. It carries the additive's volume fraction on a finer 80×80×128 grid (1 mm cells). Both 3D grids are stored as tiled 2D texture atlases, so each pass is a single draw.
 - **Pouring.** A pour enters as a turbulent round jet. It spreads at about 12°, and its centreline slows as it entrains water, since momentum flux is conserved. It carries unresolved eddies at about 25 % turbulence intensity, so milk billows into a cloud instead of falling as a thread. Dye goes in as separate drops, each punching in as a blob that rolls up into a sinking vortex ring and trails a thin filament.
 - **Buoyancy.** `g' = g Δρ/ρ` makes denser additives sink and lighter ones rise. Cream floats up, grenadine slumps across the floor as a gravity current, and on mercury everything floats.
+- **Laminar or turbulent.** Each additive has its own viscosity. A stream's Reynolds number (impact speed √(2gh) ≈ 1.7 m/s) decides how it goes in: milk billows as a turbulent plume, while cream goes in as a smooth laminar jet and honey falls as a coherent rope.
+- **Viscosity of the mixture.** It follows the local composition, interpolated in log space as for sugar solutions, so a honey blob creeps as a lump, resists the rod, and keeps its edges.
 - **Stirring.** The rod drags the liquid along its whole immersed length.
 - **Friction.** Unresolved Ekman and Stewartson layers on the floor and wall spin the swirl down. Floor friction is also what drives the secondary "tea-leaf" circulation (inward along the bottom, up the middle), though at this resolution it is weak.
 - **Pressure solve.** Red-black SOR under a rigid lid. The surface waves are handled by the modal solver.
@@ -118,7 +120,7 @@ The renderer samples the field trilinearly while it ray marches, adding a thin s
 
 Optically:
 - **Schlieren.** Each additive has its own refractive index (grenadine 1.44, honey 1.49, milk 1.35). Rays bend along the mixture's index gradient (dn/ds = ∇n), so syrup going into water shimmers and warps the view through the glass, as it does in real life.
-- **Light inside clouds.** The light reaching a point inside a cloud is attenuated along paths through the actual 3D field: the window path, plus the easiest diffuse path in (up or sideways). Absorption uses the reduced scattering coefficient μs′ = μs(1 − g). Its path-length enhancement goes from ~(1 + μs′L/2) in thin haze to the diffusion limit √(3μs′/μa) in thick media. Without this, the water's red absorption and the milk's blue absorption tint diluted milk green.
+- **Light inside clouds.** A light volume is recomputed every step. For each grid cell it stores the mean additive fraction along six paths: towards the window, straight up, and four ways sideways to the glass, 12 samples each. The renderer applies the exact path lengths, lighting each point by the window plus the easiest diffuse path in. Shadows under clouds come out smooth, and rendering does far fewer lookups. Absorption uses the reduced scattering coefficient μs′ = μs(1 − g). Its path-length enhancement goes from ~(1 + μs′L/2) in thin haze to the diffusion limit √(3μs′/μa) in thick media. Without this, the water's red absorption and the milk's blue absorption tint diluted milk green.
 
 **Rendering:** because the beaker is glass, the liquid is rendered volumetrically by ray marching through it. This gives:
 - Beer–Lambert absorption plus a Kubelka–Munk multiple-scattering source term
