@@ -66,6 +66,7 @@ uniform float uDt, uGp, uVisc, uDrag, uCreep;
 uniform vec3 uRodA, uRodB;
 uniform vec4 uRod;        // vx, vz, radius, active
 uniform vec4 uJet;        // x, z, radius, downward speed (0 = off)
+uniform float uJetMix;    // > 0: a turbulent stream; 0: separate drops
 void main() {
   ivec3 c = cellOf(gl_FragCoord.xy, uG);
   if (solid(c, uG) || air(c, uG)) { o = vec4(0.0); return; }
@@ -99,12 +100,14 @@ void main() {
     float depth = SURF_Y - p.y, r0 = max(uJet.z, 0.7 * h.x);
     float b = r0 + 0.2 * depth, wc = uJet.w * r0 / b;
     float k = exp(-pow(length(p.xz - uJet.xy) / b, 2.0)) * smoothstep(0.0, 0.002, depth);
+    // (a drop only punches ~1 cm in; the vortex ring carries it from there)
+    if (uJetMix <= 0.0) k *= exp(-depth / 0.006);
     u.y = mix(u.y, -wc, k * (1.0 - exp(-uDt * 25.0)));
     // unresolved eddies (~25 % turbulence intensity), carried down with the
     // jet; the pressure projection makes the forcing divergence-free
     vec3 nq = (p + vec3(0.0, uTime * wc * 0.7, 0.0)) / b * 1.5;
     vec3 e = vec3(vnoise3(nq), vnoise3(nq + 17.3), vnoise3(nq + 31.7)) - 0.5;
-    u += e * k * 1.2 * wc * wc / b * uDt;
+    u += e * k * 1.2 * wc * wc / b * uDt * step(0.0001, uJetMix);
   }
   // floor and wall friction (unresolved Ekman / Stewartson layers)
   float wall = step(R_IN - 1.5 * h.x, length(p.xz));
@@ -299,7 +302,7 @@ export function createMixer(gl, pass, program) {
       pass(P.vAdvect, vel.write, {
         ...grids, uG: VG, uVel3: vel.read.tex, uConc3: conc.read.tex, uDt: dt, uGp: o.gp, uVisc: visc, uDrag: drag, uCreep: creep,
         uRodA: rod.a, uRodB: rod.b, uRod: [rod.vel[0], rod.vel[1], rod.r, rod.on ? 1 : 0],
-        uJet: jet ? [jet.x, jet.z, jet.r, jet.speed] : [0, 0, 0, 0], uTime: o.time,
+        uJet: jet ? [jet.x, jet.z, jet.r, jet.speed] : [0, 0, 0, 0], uTime: o.time, uJetMix: jet ? jet.mix || 0 : 0,
       }); vel.swap();
       pass(P.vDiv, div, { ...grids, uG: VG, uVel3: vel.read.tex });
       for (let i = 0; i < (o.iters || 24); i++) {
