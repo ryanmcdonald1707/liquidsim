@@ -75,8 +75,18 @@ void main() {
     float dphi = phi - phiAt(cn, hn, res);
     if (dphi <= 0.0) continue;
     bool dry = hn < 0.015;
-    // contact-line pinning: a thin film cannot advance onto dry surface
-    if (dry && h < uHpin) continue;
+    // contact-line pinning: a thin film cannot advance onto dry surface.
+    // Line tension makes it curvature-dependent: a dry cell in a notch of the
+    // front (many wet neighbours) is easily wetted, one beyond a bulging
+    // corner is not - fronts round off instead of growing along grid axes
+    if (dry) {
+      float wetN = 0.0;
+      for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
+        ivec2 cc = clamp(cn + ivec2(i, j), ivec2(0), sz - 1);
+        wetN += step(0.015, texelFetch(uS, cc, 0).r);
+      }
+      if (h * (0.45 + 1.1 * wetN / 9.0) < uHpin) continue;
+    }
     float hm = h * 1e-3;
     float tau = hm * dphi / dx; // wall shear stress (Pa)
     if (tau < uTauY) continue;   // yield stress (rouleaux networks)
@@ -286,8 +296,11 @@ uniform float uOxy;  // 1 = arterial (oxy-Hb), 0 = venous (deoxy-Hb)
 // absorption / reduced scattering of whole blood (1/m), and its browning
 // to methaemoglobin/haemichrome as it ages and dries
 vec3 bloodSigA(float ox) {
-  vec3 fresh = mix(vec3(950.0, 21000.0, 16000.0), vec3(170.0, 26000.0, 20000.0), uOxy);
-  vec3 brown = vec3(3200.0, 8500.0, 11500.0);
+  // haemoglobin absorbs blue at least as strongly as green (the Soret band
+  // sits just below the blue primary), so blood is deep red, never magenta
+  vec3 fresh = mix(vec3(950.0, 21000.0, 25000.0), vec3(170.0, 26000.0, 30000.0), uOxy);
+  // methaemoglobin / haemichromes: the red absorption rises, browning it
+  vec3 brown = vec3(3200.0, 8500.0, 12500.0);
   return mix(fresh, brown, ox);
 }
 const vec3 BLOOD_SIGS = vec3(1500.0, 1450.0, 1400.0);
@@ -296,6 +309,7 @@ const vec3 BLOOD_SIGS = vec3(1500.0, 1450.0, 1400.0);
 export const planeFS = /* glsl */ `
 uniform sampler2D uVis, uTop;
 uniform float uCos, uSin, uClotT, uDryT;
+uniform float uTheta; // static contact angle on this surface (rad)
 in vec2 vP; in vec3 vWorld;
 out vec4 o;
 
@@ -340,6 +354,17 @@ void main() {
   vec2 uv = p / (2.0 * uHalf) + 0.5;
   vec4 s = texture(uVis, uv);
   float h = s.r, soak = s.g, age = s.b, dep = s.a;
+  // contact lines: threshold a smoother copy of the film, anti-aliased, so
+  // stain edges are crisp round curves instead of a blurry ramp or the
+  // simulation grid's staircase
+  float o1 = 1.6 / 512.0;
+  vec4 sm = 0.25 * (texture(uVis, uv + vec2(o1, o1)) + texture(uVis, uv + vec2(-o1, o1)) + texture(uVis, uv + vec2(o1, -o1)) + texture(uVis, uv + vec2(-o1, -o1)));
+  float hs = mix(h, sm.r, 0.8), ds = mix(dep, sm.a, 0.8);
+  float aw = fwidth(hs) * 0.7 + 1e-5, awd = fwidth(ds) * 0.7 + 1e-6;
+  float filmMask = smoothstep(0.008 - aw, 0.008 + aw, hs);
+  float depMask = smoothstep(0.0012 - awd, 0.0012 + awd, ds);
+  h = max(h, 0.01) * filmMask;
+  dep = max(dep, 0.0015) * depMask;
   vec3 N0 = vec3(0.0, uCos, uSin);
   vec3 T = vec3(1.0, 0.0, 0.0), B = vec3(0.0, uSin, -uCos);
   vec3 V = normalize(uCamPos - vWorld);
@@ -352,7 +377,9 @@ void main() {
   // wet clots stay dark red for hours; browning (met-Hb, haemichromes) is
   // driven mostly by drying
   float dryness = clamp(dep / max(dep + h, 1e-4), 0.0, 1.0);
-  float ox = max(clamp(age / (uDryT * 6.0), 0.0, 0.5), dryness * 0.95);
+  // drying concentrates the haemoglobin and starts the browning; full
+  // browning (met-Hb, then haemichromes) takes days
+  float ox = clamp(0.45 * dryness + 0.55 * (1.0 - exp(-age / 259200.0)), 0.0, 1.0);
   vec3 sa = bloodSigA(ox), ss = BLOOD_SIGS;
   // clot retraction squeezes out serum: a thin, straw-coloured, clear rim
   float serum = smoothstep(0.5, 1.0, age / uClotT) * (1.0 - smoothstep(0.03, 0.35, h)) * smoothstep(0.004, 0.02, h);
@@ -362,15 +389,21 @@ void main() {
   vec3 seff = sqrt(3.0 * sa * (sa + ss));
 
   // blood soaked into the substrate stains it
-  vec3 stain = mix(vec3(0.5, 0.025, 0.03), vec3(0.2, 0.06, 0.04), ox);
-  alb = mix(alb, alb * stain, 1.0 - exp(-soak * 14.0));
+  // (Beer-Lambert through the blood held in the pores, down and back up;
+  // the fibres' own scattering keeps it bright: deep, saturated red on cotton)
+  alb *= exp(-2.0 * soak * 1e-3 * bloodSigA(ox) * 0.6);
 
-  // dried deposit: dark, matte, cracking where thick
+  // dried deposit: a glossy protein film that absorbs like concentrated
+  // haemoglobin (Beer-Lambert, down and back up through it): translucent
+  // orange-red where thin, near-black red-brown where thick, with shrinkage
+  // cracks in thick crusts
+  float dryGloss = 0.0;
   if (dep > 0.0005) {
-    float thick = smoothstep(0.0, 0.012, dep) * (0.75 + 0.25 * (1.0 - exp(-dep * 30.0)));
-    vec3 dried = mix(vec3(0.26, 0.04, 0.03), vec3(0.14, 0.05, 0.035), ox) * (0.94 + 0.12 * vnoise(p * 1200.0));
-    alb = mix(alb, dried, thick);
-    // shrinkage cracks in thick crusts
+    // blood is ~80 % water: dried, its haemoglobin is ~4x as concentrated
+    vec3 saD = bloodSigA(ox) * 4.0;
+    alb *= exp(-2.0 * dep * 1e-3 * saD);
+    // the precipitated protein crust also scatters a little: dull red-brown
+    alb += vec3(0.055, 0.022, 0.016) * (1.0 - exp(-dep * 60.0));
     vec2 cp = p * 900.0;
     vec2 ip = floor(cp), fp = fract(cp);
     float md = 1e9, md2 = 1e9;
@@ -379,34 +412,44 @@ void main() {
       float d = length(g + o2 - fp);
       if (d < md) { md2 = md; md = d; } else if (d < md2) md2 = d;
     }
-    float crack = (1.0 - smoothstep(0.0, 0.06, md2 - md)) * smoothstep(0.05, 0.2, dep) * smoothstep(0.0, 0.004, dep - 0.02);
-    alb = mix(alb, alb * 0.35, crack * (1.0 - smoothstep(0.02, 0.2, h)));
-    rough = mix(rough, 0.55, thick);
+    // (only thick crusts - a dried-out pool - crack; spacing ~ a few thicknesses)
+    float crack = (1.0 - smoothstep(0.0, 0.04, md2 - md)) * smoothstep(0.15, 0.35, dep);
+    // cracks open onto the substrate (and the crust curls a little)
+    // (a crack is a shadowed gap: the substrate shows only dimly)
+    alb = mix(alb, substrate(p, rough, f0, np) * 0.3, crack * (1.0 - smoothstep(0.02, 0.2, h)) * 0.5);
+    dryGloss = smoothstep(0.0, 0.01, dep) * (1.0 - crack);
   }
-
   // liquid film over the substrate: two-layer Kubelka-Munk
   float hm = h * 1e-3;
   vec3 Td = exp(-seff * hm);
   vec3 Rf = Rinf * (1.0 - Td * Td);
   vec3 Rsub = metal > 0.5 ? vec3(0.08) : alb;
   vec3 R = Rf + (1.0 - Rf) * (1.0 - Rf) * Td * Td * Rsub / max(1.0 - Rf * Rsub, vec3(1e-3));
-  float wet = smoothstep(0.004, 0.05, h);
+  float wet = smoothstep(0.004, 0.03, h);
   vec3 base = mix(alb, R, wet);
 
   // normals: film slope (meniscus bulge of each drop and pool) + substrate
   // normals of the liquid's free surface = substrate relief + film thickness
-  float e = 1.0 / 512.0, cell = 2.0 * uHalf * e * 1e3; // mm
+  // (a broader stencil: the free surface is smooth on the scale of a cell, so
+  // tiny bumps where the film fills the grout mustn't catch the sharp wet
+  // highlight)
+  float e = 1.8 / 512.0, cell = 2.0 * uHalf * e * 1e3; // mm
   float hx = texture(uTop, uv + vec2(e, 0.0)).r - texture(uTop, uv - vec2(e, 0.0)).r;
   float hy = texture(uTop, uv + vec2(0.0, e)).r - texture(uTop, uv - vec2(0.0, e)).r;
-  vec2 grad = vec2(hx, hy) / (2.0 * cell) * 1.5 * wet;
+  vec2 grad = vec2(hx, hy) / (2.0 * cell) * wet;
+  // the liquid meets the surface at its contact angle: cap the slope there
+  float gl = length(grad), gmax = tan(uTheta);
+  if (gl > gmax) grad *= gmax / gl;
   vec3 N = normalize(N0 - T * grad.x - B * grad.y + (T * np.x + B * np.z) * (1.0 - wet));
 
   vec3 irr = windowLight(N) + ambient(N);
   vec3 diff = base / PI * irr * (1.0 - metal * (1.0 - wet));
   // clotting blood loses its mirror gloss and turns jelly-like
   float clot = clamp(age / uClotT, 0.0, 1.0);
-  float r = mix(rough, 0.02 + 0.18 * clot * clot + 0.4 * dryness, wet);
-  float F = mix(f0, 0.02, wet);
+  float r = mix(rough, 0.02 + 0.18 * clot * clot + 0.12 * dryness, wet);
+  // a dried film is glossy too, like varnish (thick crusts less so)
+  r = mix(r, 0.12, dryGloss * (1.0 - wet));
+  float F = mix(mix(f0, 0.04, dryGloss), 0.02, wet);
   float Fr = F + (1.0 - F) * pow(1.0 - max(dot(N, V), 0.0), 5.0) * (1.0 - r);
   vec3 spec = env(reflect(-V, N), r * 0.6) * Fr;
   if (metal > 0.5 && wet < 0.5) spec *= vec3(0.95, 0.96, 0.98);

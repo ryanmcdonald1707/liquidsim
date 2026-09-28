@@ -114,7 +114,7 @@ export const LIQUIDS = {
   },
   blood: {
     name: 'Blood', swatch: '#6d0712', rho: 1060, nu: 3.3e-6, sigma: 0.056, ior: 1.36, theta: 30,
-    sigA: [300, 24000, 18000], sigS: [1500, 1450, 1400],
+    sigA: [300, 24000, 28000], sigS: [1500, 1450, 1400],
     note: 'Red cells scatter strongly and haemoglobin absorbs all but red. (Newtonian here; see the Blood tab.)',
   },
 };

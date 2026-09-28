@@ -472,7 +472,7 @@ function render() {
   quad.draw();
   gl.depthMask(true);
   gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
-  G.use(gl, P.plane, { ...U, uVis: vis.tex, uTop: visTop.tex, uClotT: BLOOD.clotT, uDryT: BLOOD.dryT });
+  G.use(gl, P.plane, { ...U, uVis: vis.tex, uTop: visTop.tex, uClotT: BLOOD.clotT, uDryT: BLOOD.dryT, uTheta: SURFACES[sim.surface].theta * Math.PI / 180 });
   quad.draw();
   // drops in flight
   const n = Math.min(sim.drops.length, MAXD);
