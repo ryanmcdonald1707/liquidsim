@@ -141,7 +141,7 @@ A 30 × 30 cm patch of surface you can tilt from floor to wall. It's built for s
 - **Arterial spurt:** a pulsatile jet at 75 bpm.
 - **Impact spatter:** drag to set the direction and strength of a blow.
 - **Cast-off:** flung off a swung object in a line.
-- **Smear:** wipe through wet blood.
+- **Smear:** wipe through wet blood. The wipe scrapes the film: it leaves a thin film of about 0.06 mm behind, striated by finger ridges or cloth fibres, and pushes the excess ahead as a bead at the wiper's leading edge.
 
 **Surfaces:** glazed tile (blood runs into the grout), concrete (porous), varnished wood (wicks along the grain), cotton fabric (soaks in fast and wicks outwards), and brushed steel.
 
@@ -156,8 +156,8 @@ A 30 × 30 cm patch of surface you can tilt from floor to wall. It's built for s
 
   The last impact's numbers appear in the side panel.
 - **Porous surfaces:** they absorb blood into the pores, then wick it outwards by capillarity. Wood wicks anisotropically, along the grain.
-- **Clotting and drying:** blood clots over minutes, stops flowing, and loses its mirror gloss. Clot retraction leaves a straw-coloured serum rim. Evaporation, fastest at thin edges, leaves a coffee-ring deposit: a glossy protein film with about 4× the haemoglobin density of liquid blood (blood is ~80 % water). It is rendered by Beer–Lambert absorption, so it's translucent orange-red where thin and near-black red-brown where thick. It browns over days as met-haemoglobin and haemichromes form, and only thick crusts crack. Use the time-scale slider to fast-forward.
-- **Optics:** haemoglobin absorption and red-cell scattering are combined with two-layer Kubelka–Munk over the substrate, so thin smears are lighter red and thick pools are deep crimson. Haemoglobin absorbs blue at least as strongly as green (the Soret band sits just below the blue primary), so blood is never magenta. Blood soaked into fabric or concrete is also rendered with Beer–Lambert absorption, giving the deep, saturated red of blood on cotton. Arterial (oxygenated) blood is brighter than venous blood, and the wet film has gloss and a meniscus bulge.
+- **Clotting and drying:** blood clots over minutes, stops flowing, and loses its mirror gloss. Clot retraction pulls the gel back from the thin rim, leaving a clear, straw-coloured ring of serum with a crisp inner edge, and the setting clot grows a faintly wrinkled, satin skin. Evaporation, fastest at thin edges, leaves a coffee-ring deposit: a glossy protein film with about 4× the haemoglobin density of liquid blood (blood is ~80 % water). It is rendered by Beer–Lambert absorption, so it's translucent orange-red where thin and near-black red-brown where thick. It browns over days as met-haemoglobin and haemichromes form, and only thick crusts crack. Use the time-scale slider to fast-forward.
+- **Optics:** haemoglobin absorption and red-cell scattering are combined with two-layer Kubelka–Munk over the substrate, so thin smears are lighter red and thick pools are deep crimson. Haemoglobin absorbs blue at least as strongly as green (the Soret band sits just below the blue primary), so blood is never magenta. Blood soaked into fabric or concrete is also rendered with Beer–Lambert absorption, giving the deep, saturated red of blood on cotton. Arterial (oxygenated) blood is brighter than venous blood, and the wet film has gloss and a meniscus bulge. On steel, the mirror reflection passes through the film, down and back up, so thin blood is a red filter over the metal rather than a dark ring.
 
 ## Rain
 

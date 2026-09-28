@@ -127,22 +127,33 @@ void main() {
   float age = s.b;
   if (src > 0.0) age *= s.r / max(s.r + src, 1e-6);
 
-  // smear: drag the film along the stroke, leaving streaks
+  // smear: a wipe (finger or cloth) scrapes the film along the stroke. Behind
+  // it stays a thin film striated by the ridges or fibres; the excess rides
+  // along and piles up as a bead at the wiper's leading edge.
   vec2 p = cellToP(vec2(c) + 0.5, res);
   if (uSmearR > 0.0) {
     vec2 a = uSmear.xy, b = uSmear.zw, ab = b - a;
+    float L = length(ab);
+    vec2 dir = ab / max(L, 1e-9);
     float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);
     float d = length(p - a - ab * t);
-    float m = 1.0 - smoothstep(uSmearR * 0.6, uSmearR, d);
-    if (m > 0.0) {
-      vec2 back = p - ab;
-      vec2 bc = (back / (2.0 * uHalf) + 0.5) * res;
-      vec4 sb = texelFetch(uS, ivec2(clamp(bc, vec2(0.0), res - 1.0)), 0);
-      vec2 dir = normalize(ab + 1e-9);
-      float streak = 0.55 + 0.45 * vnoise(vec2(dot(p, vec2(-dir.y, dir.x)) * 2500.0, 0.0));
-      float moved = mix(h, sb.r * streak, m * 0.85);
-      h = moved;
-      age = mix(age, sb.b, m * 0.85);
+    float m = 1.0 - smoothstep(uSmearR * 0.75, uSmearR, d);
+    // what the wiper brought to this cell: the film one stroke back
+    vec2 bc = ((p - ab) / (2.0 * uHalf) + 0.5) * res;
+    vec4 sb = texelFetch(uS, ivec2(clamp(bc, vec2(0.0), res - 1.0)), 0);
+    float across = dot(p, vec2(-dir.y, dir.x));
+    float streak = 0.3 + 0.7 * smoothstep(0.25, 0.75, vnoise(vec2(across * 1600.0, 0.0)) * 0.7 + vnoise(vec2(across * 450.0, 3.0)) * 0.3);
+    const float hLeave = 0.06; // mm left behind the wiper
+    float ahead = dot(p - b, dir);
+    if (m > 0.0 && ahead < 0.0) {
+      // swept: a thin striated film of whatever was here or was carried in
+      float left = min(max(h, sb.r), hLeave) * streak;
+      h = mix(h, left, m);
+      age = mix(age, sb.b, m * 0.5);
+    } else if (ahead >= 0.0 && ahead < uSmearR * 0.5 && length(p - b) < uSmearR) {
+      // the leading edge: the scraped-up excess piles into a bead
+      float bead = 1.0 - smoothstep(uSmearR * 0.6, uSmearR, length(p - b));
+      h += max(sb.r - hLeave, 0.0) * bead * 0.9;
     }
   }
 
@@ -382,9 +393,12 @@ void main() {
   float ox = clamp(0.45 * dryness + 0.55 * (1.0 - exp(-age / 259200.0)), 0.0, 1.0);
   vec3 sa = bloodSigA(ox), ss = BLOOD_SIGS;
   // clot retraction squeezes out serum: a thin, straw-coloured, clear rim
-  float serum = smoothstep(0.5, 1.0, age / uClotT) * (1.0 - smoothstep(0.03, 0.35, h)) * smoothstep(0.004, 0.02, h);
-  sa = mix(sa, vec3(6.0, 12.0, 70.0), serum * 0.85);
-  ss = mix(ss, vec3(8.0), serum * 0.85);
+  // the retracting clot pulls back from the thin rim: a crisp inner edge,
+  // with clear straw-yellow serum between it and the stain's outline
+  float hsCl = mix(h, hs, 0.5), awc = fwidth(hsCl) * 0.7 + 1e-5;
+  float serum = smoothstep(0.5, 1.0, age / uClotT) * (1.0 - smoothstep(0.11 - awc, 0.11 + awc, hsCl)) * filmMask;
+  sa = mix(sa, vec3(6.0, 12.0, 70.0), serum * 0.95);
+  ss = mix(ss, vec3(8.0), serum * 0.95);
   vec3 Rinf = kmAlbedo(sa, ss);
   vec3 seff = sqrt(3.0 * sa * (sa + ss));
 
@@ -398,12 +412,14 @@ void main() {
   // orange-red where thin, near-black red-brown where thick, with shrinkage
   // cracks in thick crusts
   float dryGloss = 0.0;
+  vec3 dryT = vec3(1.0), crust = vec3(0.0);
   if (dep > 0.0005) {
     // blood is ~80 % water: dried, its haemoglobin is ~4x as concentrated
     vec3 saD = bloodSigA(ox) * 4.0;
-    alb *= exp(-2.0 * dep * 1e-3 * saD);
+    dryT = exp(-2.0 * dep * 1e-3 * saD);
     // the precipitated protein crust also scatters a little: dull red-brown
-    alb += vec3(0.055, 0.022, 0.016) * (1.0 - exp(-dep * 60.0));
+    crust = vec3(0.055, 0.022, 0.016) * (1.0 - exp(-dep * 60.0));
+    alb = alb * dryT + crust;
     vec2 cp = p * 900.0;
     vec2 ip = floor(cp), fp = fract(cp);
     float md = 1e9, md2 = 1e9;
@@ -423,10 +439,12 @@ void main() {
   float hm = h * 1e-3;
   vec3 Td = exp(-seff * hm);
   vec3 Rf = Rinf * (1.0 - Td * Td);
-  vec3 Rsub = metal > 0.5 ? vec3(0.08) : alb;
+  // (a metal has no diffuse reflection: its light is all in the specular
+  // term below, so it mustn't leak in as a grey diffuse colour at film edges)
+  vec3 Rsub = metal > 0.5 ? vec3(0.0) : alb;
   vec3 R = Rf + (1.0 - Rf) * (1.0 - Rf) * Td * Td * Rsub / max(1.0 - Rf * Rsub, vec3(1e-3));
   float wet = smoothstep(0.004, 0.03, h);
-  vec3 base = mix(alb, R, wet);
+  vec3 base = mix(metal > 0.5 ? crust : alb, R, wet);
 
   // normals: film slope (meniscus bulge of each drop and pool) + substrate
   // normals of the liquid's free surface = substrate relief + film thickness
@@ -440,10 +458,14 @@ void main() {
   // the liquid meets the surface at its contact angle: cap the slope there
   float gl = length(grad), gmax = tan(uTheta);
   if (gl > gmax) grad *= gmax / gl;
+  // a setting clot grows a faintly wrinkled skin as its surface dries
+  float skin = smoothstep(0.4, 1.2, age / uClotT) * (1.0 - serum) * wet;
+  vec2 wk = p * 700.0;
+  grad += skin * 0.08 * vec2(vnoise(wk) - 0.5, vnoise(wk + 9.3) - 0.5) + skin * 0.04 * vec2(vnoise(wk * 2.7 + 3.0) - 0.5, vnoise(wk * 2.7 + 7.0) - 0.5);
   vec3 N = normalize(N0 - T * grad.x - B * grad.y + (T * np.x + B * np.z) * (1.0 - wet));
 
   vec3 irr = windowLight(N) + ambient(N);
-  vec3 diff = base / PI * irr * (1.0 - metal * (1.0 - wet));
+  vec3 diff = base / PI * irr;
   // clotting blood loses its mirror gloss and turns jelly-like
   float clot = clamp(age / uClotT, 0.0, 1.0);
   float r = mix(rough, 0.02 + 0.18 * clot * clot + 0.12 * dryness, wet);
@@ -452,7 +474,16 @@ void main() {
   float F = mix(mix(f0, 0.04, dryGloss), 0.02, wet);
   float Fr = F + (1.0 - F) * pow(1.0 - max(dot(N, V), 0.0), 5.0) * (1.0 - r);
   vec3 spec = env(reflect(-V, N), r * 0.6) * Fr;
-  if (metal > 0.5 && wet < 0.5) spec *= vec3(0.95, 0.96, 0.98);
+  // (bare or dried-over steel: its mirror, filtered by any dried film)
+  if (metal > 0.5 && wet < 0.5) spec *= vec3(0.95, 0.96, 0.98) * mix(vec3(1.0), dryT, 1.0 - wet);
+  // steel under a film: its mirror reflection still comes through, filtered
+  // by the blood on the way down and back up - thin blood on steel is a red
+  // filter over a mirror, not a dark ring
+  if (metal > 0.5) {
+    vec3 N0p = normalize(N0 + T * np.x + B * np.z);
+    vec3 Tf = exp(-2.0 * (sa + ss * 0.15) * hm / max(dot(N0p, V), 0.3));
+    spec += env(reflect(-V, N0p), rough * 0.6) * f0 * vec3(0.95, 0.96, 0.98) * Tf * wet * (1.0 - Fr);
+  }
   // soft contact shadow of the room
   o = vec4(min(diff * (1.0 - Fr * (1.0 - metal)) + spec, vec3(40.0)), 1.0);
 }
