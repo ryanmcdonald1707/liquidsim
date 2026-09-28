@@ -107,14 +107,18 @@ Switching additive keeps whatever is already mixed in, and a floating oil layer 
 
 **3D mixing** (`src/mix3d.js`)
 Under the surface, an incompressible Boussinesq flow runs on a 40×40×64 grid. It carries the additive's volume fraction on a finer 80×80×128 grid (1 mm cells). Both 3D grids are stored as tiled 2D texture atlases, so each pass is a single draw.
-- **Pouring.** A pour enters as a jet with its own momentum. Dye goes in as separate drops, each punching in as a blob that rolls up into a sinking vortex ring and trails a thin filament.
+- **Pouring.** A pour enters as a turbulent round jet. It spreads at about 12°, and its centreline slows as it entrains water, since momentum flux is conserved. It carries unresolved eddies at about 25 % turbulence intensity, so milk billows into a cloud instead of falling as a thread. Dye goes in as separate drops, each punching in as a blob that rolls up into a sinking vortex ring and trails a thin filament.
 - **Buoyancy.** `g' = g Δρ/ρ` makes denser additives sink and lighter ones rise. Cream floats up, grenadine slumps across the floor as a gravity current, and on mercury everything floats.
 - **Stirring.** The rod drags the liquid along its whole immersed length.
 - **Friction.** Unresolved Ekman and Stewartson layers on the floor and wall spin the swirl down. Floor friction is also what drives the secondary "tea-leaf" circulation (inward along the bottom, up the middle), though at this resolution it is weak.
 - **Pressure solve.** Red-black SOR under a rigid lid. The surface waves are handled by the modal solver.
 - **Advection.** The additive is advected with MacCormack plus a monotone limiter.
 
-The renderer samples the field trilinearly while it ray marches. It adds the 2D flow's high-resolution surface film and sub-grid filaments on top.
+The renderer samples the field trilinearly while it ray marches, adding a thin surface film from the 2D flow. Sub-grid filaments are advected by the local 3D velocity, blending two noise phases, so fine detail moves with the liquid instead of sliding through it.
+
+Optically:
+- **Schlieren.** Each additive has its own refractive index (grenadine 1.44, honey 1.49, milk 1.35). Rays bend along the mixture's index gradient (dn/ds = ∇n), so syrup going into water shimmers and warps the view through the glass, as it does in real life.
+- **Light inside clouds.** The light reaching a point inside a cloud is attenuated along paths through the actual 3D field: the window path, plus the easiest diffuse path in (up or sideways). Absorption uses the reduced scattering coefficient μs′ = μs(1 − g). Its path-length enhancement goes from ~(1 + μs′L/2) in thin haze to the diffusion limit √(3μs′/μa) in thick media. Without this, the water's red absorption and the milk's blue absorption tint diluted milk green.
 
 **Rendering:** because the beaker is glass, the liquid is rendered volumetrically by ray marching through it. This gives:
 - Beer–Lambert absorption plus a Kubelka–Munk multiple-scattering source term

@@ -540,7 +540,7 @@ function stepPhysics(dt) {
     // a drop is a compact blob; a stream penetrates a few centimetres
     const zs = add.drops ? 1.2 : 5;
     const vBlob = Math.PI ** 1.5 * zs * r ** 3;
-    const jet = { x: state.pourPos[0], z: state.pourPos[1], r, zs, speed: add.drops ? 0.12 : 0.4, rate: add.amount * vLiq / (tIn * vBlob) };
+    const jet = { x: state.pourPos[0], z: state.pourPos[1], r, zs, mix: add.drops ? 0 : 0.3, speed: add.drops ? 0.12 : 0.4, rate: add.amount * vLiq / (tIn * vBlob) };
     mixer.step({
       dt, surfY: state.fill, nu: liq.nu, gp, time: simTime,
       diff: perFrame(0.004 * slow + 0.02 * stirring, dt),
@@ -625,7 +625,8 @@ function render() {
     uHeight: heightT.tex, uDye: dye.read.tex,
     uSigA: state.base.sigA, uSigS: state.base.sigS, uAddA: add.sigA, uAddS: add.sigS, uF0: liq.f0 || [0, 0, 0],
     uAddBase: state.addTotal, uIor: liq.ior, uMetal: liq.metal ? 1 : 0,
-    uConc3: mixer.conc.read.tex, uGC: MX.CG, uSurfGain: sink ? 0.4 : 1, uSurfLayer: float ? 0.003 : 0.0015, uRodA: rA, uRodB: rB, uRodIn: rod.blend > 0.6 ? 1 : 0,
+    uConc3: mixer.conc.read.tex, uGC: MX.CG, uSurfGain: sink ? 0.3 : float ? 1 : 0.6, uSurfLayer: float ? 0.002 : 0.0007, uVel3: mixer.vel.read.tex,
+    uDn: liq.metal || add.immiscible ? 0 : (add.ior || liq.ior) - liq.ior, uRodA: rA, uRodB: rB, uRodIn: rod.blend > 0.6 ? 1 : 0,
     uOilA: ADDITIVES.oil.sigA, uOilS: ADDITIVES.oil.sigS, uHasOil: state.oil > 0 ? 1 : 0,
     uHasAdd: state.poured ? 1 : 0,
     uOilThick: state.oil * (state.fill - D.INNER_BOTTOM),

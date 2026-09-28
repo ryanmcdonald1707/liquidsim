@@ -14,7 +14,8 @@ uniform float uOilThick;        // thickness of the floating oil layer (m)
 uniform float uCarb, uBubR, uRise, uBoil; // gas bubbles: density, radius, rise speed
 uniform float uFoamH;           // foam head thickness (m)
 uniform vec3 uFoamCol;
-uniform sampler2D uConc3;   // 3D additive field (see mix3d.js)
+uniform sampler2D uConc3, uVel3; // 3D additive field and flow (see mix3d.js)
+uniform float uDn;          // refractive index of the additive minus the base's
 uniform float uSurfGain, uSurfLayer; // surface film from the 2D flow: weight, thickness (m)
 uniform vec3 uRodA, uRodB;
 uniform float uRodIn;
@@ -32,10 +33,17 @@ float addConc(vec3 q) {
   float c2 = texture(uDye, q.xz / (2.0 * R_IN) + 0.5).r;
   c = max(c, c2 * uSurfGain * exp(-depth / uSurfLayer));
   if (c > 1e-4) {
-    // rotated lattice so value-noise cell faces never line up with the view
+    // sub-grid filaments carried by the local flow: two noise phases, each
+    // advected for a second then faded out as the other takes over (the
+    // detail moves with the liquid instead of sliding through it)
     const mat3 ROT = mat3(0.8, 0.36, -0.48, -0.6, 0.48, -0.64, 0.0, 0.8, 0.6);
-    vec3 nq = ROT * (q * vec3(520.0, 240.0, 520.0)) + vec3(0.0, uTime * 0.3, 0.0);
-    float n = vnoise3(nq) * 0.6 + vnoise3(nq * 2.4 + 5.0) * 0.4;
+    vec3 v = sample3(uVel3, q, uGV).xyz;
+    float n = 0.0;
+    for (int k = 0; k < 2; k++) {
+      float ph = fract(uTime * 0.5 + 0.5 * float(k));
+      vec3 nq = ROT * ((q - v * ph * 2.0) * vec3(520.0, 240.0, 520.0)) + float(k) * 13.7;
+      n += (1.0 - abs(2.0 * ph - 1.0)) * (vnoise3(nq) * 0.6 + vnoise3(nq * 2.4 + 5.0) * 0.4);
+    }
     c *= 0.4 + 1.2 * n;
   }
   return clamp(c, 0.0, 1.0);
@@ -159,25 +167,29 @@ vec3 inscatter(vec3 q, vec3 sa, vec3 ss) {
   // would turn attenuation into amplification
   float top = SURF_Y + surfH(q.xz);
   float tl = max(min(wallDist(q, LW), (top - q.y) / max(LW.y, 1e-3)), 0.0);
-  float esc = max(min(R_IN - length(q.xz), top - q.y), 0.0);
-  // the light reaching q crosses mostly *other* liquid on its way in: take the
-  // additive fraction along each path from the 3D field, not the medium at q
+  // the light reaching q crosses mostly *other* liquid on its way in, so the
+  // optical depth of each path is taken from the 3D field, not the medium at q
   // (a milk cloud in water would otherwise be lit through centimetres of neat
-  // milk, and the milk's blue absorption plus the water's red absorption
-  // would turn it green)
-  vec3 lit = vec3(0.0);
-  for (int k = 0; k < 2; k++) {
-    vec3 dir = k == 0 ? LW : vec3(0.0, 1.0, 0.0);
-    float len = k == 0 ? tl : esc;
+  // milk and go green). Direct light comes from the window; diffuse light
+  // arrives from wherever the liquid around q is thinnest: up and sideways.
+  vec3 lit = vec3(0.0), amb = vec3(0.0);
+  for (int k = 0; k < 6; k++) {
+    vec3 dir = k == 0 ? LW : k == 1 ? vec3(0.0, 1.0, 0.0) : vec3(cos(float(k) * 1.5708), 0.0, sin(float(k) * 1.5708));
+    float len = k == 0 ? tl : k == 1 ? max(top - q.y, 0.0) : max(wallDist(q, dir), 0.0);
+    int ns = k == 0 ? 4 : 3;
     float c = 0.0;
-    if (uHasAdd > 0.5) for (int i = 0; i < 4; i++) c += sample3(uConc3, q + dir * len * (float(i) + 0.5) / 4.0, uGC).x * 0.25;
-    // diffusion with the reduced scattering coefficient: colloids like milk
-    // fat scatter strongly forwards (g ~ 0.85), so a scattering event barely
-    // lengthens the light's path
-    vec3 pa = mix(uSigA, uAddA, c), ps = mix(uSigS, uAddS, c);
-    vec3 seff = min(pa + ps, sqrt(3.0 * pa * (pa + ps * (1.0 - G_FWD))) + pa);
-    lit += (k == 0 ? vec3(1.0, 0.97, 0.94) * WIN_E * 0.55 : ambient(vec3(0.0, 1.0, 0.0))) * exp(-seff * len);
+    if (uHasAdd > 0.5) for (int i = 0; i < 4; i++) { if (i >= ns) break; c += sample3(uConc3, q + dir * len * (float(i) + 0.5) / float(ns), uGC).x / float(ns); }
+    // scattering lengthens the path light takes, so absorption bites harder:
+    // in thick media by the diffusion factor sqrt(3 mus'/mua), in thin ones
+    // only by ~(1 + mus' L / 2). Uses the reduced scattering coefficient:
+    // colloids like milk fat scatter strongly forwards.
+    vec3 pa = mix(uSigA, uAddA, c), psr = mix(uSigS, uAddS, c) * (1.0 - G_FWD);
+    vec3 mu = min(sqrt(3.0 * pa * (pa + psr)), pa * (1.0 + 0.5 * psr * len));
+    vec3 Tk = exp(-mu * len);
+    if (k == 0) lit += vec3(1.0, 0.97, 0.94) * WIN_E * 0.55 * Tk;
+    else amb = max(amb, Tk); // diffuse light takes the easiest way in
   }
+  lit += ambient(vec3(0.0, 1.0, 0.0)) * amb;
   return kmFinite(sa, ss, 1.5 * R_IN) / PI * lit;
 }
 
@@ -238,11 +250,27 @@ vec3 marchLiquid(vec3 p, vec3 d, float jit) {
     int N = seg == 0 ? 40 : 12;
     vec3 nb;
     float tbub = seg == 0 ? bubbleHit(p, d, te, nb) : 1e9;
+    vec3 dc = d, off = vec3(0.0); // schlieren: bent direction and drift
     for (int i = 0; i < 40; i++) {
       if (i >= N) break;
       float u0 = float(i) / float(N), u1 = float(i + 1) / float(N);
       float tA = te * u0 * u0, tB = te * u1 * u1, ds = tB - tA;
-      vec3 q = p + d * (tA + ds * jit);
+      vec3 q = p + d * (tA + ds * jit) + off;
+      // a mixture's refractive index follows its composition: rays bend
+      // towards denser-index liquid (dn/ds = grad n), the shimmer you see
+      // when syrup or milk goes into water
+      if (uDn != 0.0 && uHasAdd > 0.5 && sample3(uConc3, q, uGC).x > 3e-4) {
+        const float e = 0.0012;
+        vec3 gc = vec3(
+          sample3(uConc3, q + vec3(e, 0, 0), uGC).x - sample3(uConc3, q - vec3(e, 0, 0), uGC).x,
+          sample3(uConc3, q + vec3(0, e, 0), uGC).x - sample3(uConc3, q - vec3(0, e, 0), uGC).x,
+          sample3(uConc3, q + vec3(0, 0, e), uGC).x - sample3(uConc3, q - vec3(0, 0, e), uGC).x) / (2.0 * e);
+        vec3 gn = uDn * gc / uIor;
+        dc = normalize(dc + (gn - dc * dot(gn, dc)) * ds);
+        off += (dc - d) * ds;
+        float lo = length(off);
+        if (lo > 0.006) off *= 0.006 / lo;
+      }
       if (tbub < tB) {
         // a gas bubble: beyond the critical angle (liquid -> gas) light is
         // totally reflected, giving the bright silvery rim of real bubbles
@@ -269,9 +297,10 @@ vec3 marchLiquid(vec3 p, vec3 d, float jit) {
       T *= a;
       if (max(T.r, max(T.g, T.b)) < 0.002) return L;
     }
-    vec3 e = p + d * te;
+    vec3 e = p + d * te + off;
+    d = dc;
     vec3 nOut; // outward normal of the interface we reached
-    if (te == tw) nOut = vec3(e.x, 0.0, e.z) / R_IN;
+    if (te == tw) nOut = normalize(vec3(e.x, 0.0, e.z) + 1e-9);
     else if (te == tb) nOut = vec3(0.0, -1.0, 0.0);
     else nOut = surfN(e.xz);
     vec3 d2 = refract(d, -nOut, uIor);

@@ -92,11 +92,19 @@ void main() {
     float k = exp(-pow(d / (uRod.z + 0.6 * h.x), 2.0));
     u.xz = mix(u.xz, uRod.xy, k * (1.0 - exp(-uDt * 60.0)));
   }
-  // the poured stream plunges in
+  // the poured stream plunges in as a turbulent round jet: it spreads at
+  // ~12 degrees and slows as it entrains the water around it (momentum flux
+  // is conserved, so the centreline speed falls as 1/width)
   if (uJet.w > 0.0) {
-    float d = length(p.xz - uJet.xy), depth = SURF_Y - p.y;
-    float k = exp(-pow(d / max(uJet.z, 0.7 * h.x), 2.0)) * smoothstep(0.0, 0.002, depth) * exp(-depth / 0.006);
-    u.y = mix(u.y, -uJet.w, k * (1.0 - exp(-uDt * 40.0)));
+    float depth = SURF_Y - p.y, r0 = max(uJet.z, 0.7 * h.x);
+    float b = r0 + 0.2 * depth, wc = uJet.w * r0 / b;
+    float k = exp(-pow(length(p.xz - uJet.xy) / b, 2.0)) * smoothstep(0.0, 0.002, depth);
+    u.y = mix(u.y, -wc, k * (1.0 - exp(-uDt * 25.0)));
+    // unresolved eddies (~25 % turbulence intensity), carried down with the
+    // jet; the pressure projection makes the forcing divergence-free
+    vec3 nq = (p + vec3(0.0, uTime * wc * 0.7, 0.0)) / b * 1.5;
+    vec3 e = vec3(vnoise3(nq), vnoise3(nq + 17.3), vnoise3(nq + 31.7)) - 0.5;
+    u += e * k * 1.2 * wc * wc / b * uDt;
   }
   // floor and wall friction (unresolved Ekman / Stewartson layers)
   float wall = step(R_IN - 1.5 * h.x, length(p.xz));
@@ -188,6 +196,7 @@ uniform sampler2D uVel3, uOrig3, uFwd3, uBwd3;
 uniform float uDt, uDiff;
 uniform vec4 uJet;        // x, z, radius, source rate (1/s at the blob's centre)
 uniform float uJetZ;      // vertical extent of the source, in radii
+uniform float uJetMix;    // entrainment mixing of a turbulent stream (0 for drops)
 float hash(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
 void main() {
   ivec3 c = cellOf(gl_FragCoord.xy, uG);
@@ -216,7 +225,13 @@ void main() {
     ivec3 e = ivec3(0); e[a] = s;
     nb += fetch3(uFwd3, c + e, uG).x;
   }
-  res = mix(res, nb / 6.0, uDiff);
+  // (the jet's turbulence mixes what it carries with the water it entrains)
+  float kj = 0.0;
+  if (uJet.w > 0.0 && uJetMix > 0.0) {
+    float depth = SURF_Y - p.y, bj = uJet.z + 0.2 * max(depth, 0.0);
+    kj = exp(-pow(length(p.xz - uJet.xy) / (1.5 * bj), 2.0)) * step(0.0, depth) * uJetMix;
+  }
+  res = mix(res, nb / 6.0, min(uDiff + kj, 0.9));
   // the pour: pure additive enters with the stream (a ragged, breaking jet)
   if (uJet.w > 0.0) {
     float d = length(p.xz - uJet.xy), depth = SURF_Y - p.y;
@@ -284,7 +299,7 @@ export function createMixer(gl, pass, program) {
       pass(P.vAdvect, vel.write, {
         ...grids, uG: VG, uVel3: vel.read.tex, uConc3: conc.read.tex, uDt: dt, uGp: o.gp, uVisc: visc, uDrag: drag, uCreep: creep,
         uRodA: rod.a, uRodB: rod.b, uRod: [rod.vel[0], rod.vel[1], rod.r, rod.on ? 1 : 0],
-        uJet: jet ? [jet.x, jet.z, jet.r, jet.speed] : [0, 0, 0, 0],
+        uJet: jet ? [jet.x, jet.z, jet.r, jet.speed] : [0, 0, 0, 0], uTime: o.time,
       }); vel.swap();
       pass(P.vDiv, div, { ...grids, uG: VG, uVel3: vel.read.tex });
       for (let i = 0; i < (o.iters || 24); i++) {
@@ -299,7 +314,7 @@ export function createMixer(gl, pass, program) {
       pass(P.cAdvect, cB, { ...grids, uG: CG, uVel3: vel.read.tex, uSrc3: cF.tex, uDt: -dt });
       pass(P.cMac, conc.write, {
         ...grids, uG: CG, uVel3: vel.read.tex, uOrig3: conc.read.tex, uFwd3: cF.tex, uBwd3: cB.tex, uDt: dt,
-        uDiff: o.diff, uTime: o.time, uJet: jet ? [jet.x, jet.z, jet.r, jet.rate] : [0, 0, 0, 0], uJetZ: jet ? jet.zs : 1,
+        uDiff: o.diff, uTime: o.time, uJet: jet ? [jet.x, jet.z, jet.r, jet.rate] : [0, 0, 0, 0], uJetZ: jet ? jet.zs : 1, uJetMix: jet ? jet.mix || 0 : 0,
       }); conc.swap();
     },
   };
