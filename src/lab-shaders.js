@@ -11,6 +11,7 @@ uniform vec3 uSigA, uSigS, uAddA, uAddS, uF0, uOilA, uOilS;
 uniform float uAddBase, uIor, uMetal; // uAddBase: total poured fraction (for shadows)
 uniform float uHasAdd, uHasOil; // skip the plume noise when nothing is poured in
 uniform float uOilThick;        // thickness of the floating oil layer (m)
+uniform vec3 uOilSpread;        // spreading oil layer: centre x, z and radius
 uniform float uCarb, uBubR, uRise, uBoil; // gas bubbles: density, radius, rise speed
 uniform float uFoamH;           // foam head thickness (m)
 uniform vec3 uFoamCol;
@@ -55,17 +56,61 @@ float oilConc(vec3 q) {
   if (uHasOil < 0.5) return 0.0;
   float depth = max(SURF_Y + surfH(q.xz) - q.y, 0.0);
   float th = max(uOilThick, 0.0015);
-  return clamp(texture(uDye, q.xz / (2.0 * R_IN) + 0.5).g * 1.6, 0.0, 1.0) * (1.0 - smoothstep(th * 0.75, th * 1.05, depth));
+  // the layer spreading from where it was poured (a slightly ragged front),
+  // plus whatever the surface flow has swirled around
+  float front = length(q.xz - uOilSpread.xy) + 0.002 * (vnoise(q.xz * 300.0) - 0.5);
+  float cov = 1.0 - smoothstep(uOilSpread.z * 0.9, uOilSpread.z, front);
+  float c = max(clamp(texture(uDye, q.xz / (2.0 * R_IN) + 0.5).g * 1.6, 0.0, 1.0), cov);
+  // the front is a thin, tapering lip
+  float thl = th * mix(1.0, 0.4, smoothstep(uOilSpread.z * 0.8, uOilSpread.z, front));
+  return c * (1.0 - smoothstep(thl * 0.75, thl * 1.05, depth));
 }
 // Foam head: a dense froth of gas cells. KM inverted so its colour is uFoamCol.
-bool inFoam(vec3 q) { return uFoamH > 0.0 && q.y > SURF_Y + surfH(q.xz) - uFoamH; }
+// The head drains from the bottom: next to the beer it is wet, with bigger
+// bubbles and more liquid between them; the top is dry and fine. Its lower
+// edge is ragged, and against the glass the cells press flat into polygons.
+float foamBase(vec2 xz) {
+  return SURF_Y + surfH(xz) - uFoamH * (1.0 + 0.12 * (vnoise(xz * 180.0) - 0.5) + 0.03 * (vnoise(xz * 600.0) - 0.5));
+}
+bool inFoam(vec3 q) { return uFoamH > 0.0 && q.y > foamBase(q.xz); }
+// distance to the nearest cell wall of a 2D Voronoi foam (F2 - F1)
+float foamCells(vec2 x) {
+  vec2 i = floor(x), f = fract(x);
+  float d1 = 8.0, d2 = 8.0;
+  for (int k = 0; k < 9; k++) {
+    vec2 g = vec2(float(k % 3) - 1.0, float(k / 3) - 1.0);
+    vec2 o = vec2(hash12(i + g), hash12(i + g + 17.3)) * 0.8 + 0.1;
+    float d = length(g + o - f);
+    if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+  }
+  return d2 - d1;
+}
 void foamMedium(vec3 q, out vec3 sa, out vec3 ss) {
-  float depth = SURF_Y + surfH(q.xz) - q.y;
-  float cells = vnoise3(q * 1400.0) * 0.6 + vnoise3(q * 3100.0 + 7.0) * 0.4;
-  float drain = smoothstep(uFoamH, uFoamH * 0.3, depth); // wetter, denser near the liquid
-  ss = vec3(9000.0) * (0.45 + 1.1 * cells) * mix(0.6, 1.0, drain);
+  float top = SURF_Y + surfH(q.xz), base = foamBase(q.xz);
+  float wet = clamp((top - q.y) / max(top - base, 1e-4), 0.0, 1.0); // 0 top .. 1 bottom
+  wet = wet * wet;
+  // bubble size grows towards the wet bottom; liquid fraction 3 % -> 25 %
+  float cell = mix(1700.0, 700.0, wet);
+  float cells = vnoise3(q * cell) * 0.6 + vnoise3(q * cell * 2.2 + 7.0) * 0.4;
+  float phi = mix(0.03, 0.25, wet);
+  ss = vec3(9000.0) * (0.45 + 1.1 * cells) * mix(1.0, 0.45, wet);
+  // the bottom fifth thins out into bubbly beer: a soft boundary, not an edge
+  ss *= smoothstep(0.0, 0.2 * uFoamH, q.y - base);
+  // polygonal cells flattened against the glass: bright Plateau borders
+  // around clearer faces
+  float r = length(q.xz), wallEdge = 0.0;
+  if (r > R_IN - 0.0012) {
+    vec2 uv = vec2(atan(q.z, q.x) * R_IN, q.y) * mix(1400.0, 650.0, wet);
+    float edge = 1.0 - smoothstep(0.02, 0.12, foamCells(uv));
+    ss *= mix(0.6, 1.3, edge);
+    // liquid-filled Plateau borders refract light away: darker lines
+    wallEdge = edge;
+  }
   vec3 R = clamp(uFoamCol * (0.9 + 0.2 * cells), 0.05, 0.97);
   sa = ss * (1.0 - R) * (1.0 - R) / (4.0 * R);
+  sa += vec3(2500.0) * wallEdge;
+  // the liquid held in the wet foam colours it like the drink
+  sa = mix(sa, uSigA, phi);
 }
 // Optical properties of the liquid at q: base + mixed-in additive + oil.
 void medium(vec3 q, out vec3 sa, out vec3 ss) {
@@ -203,32 +248,46 @@ float bubbleHit(vec3 p, vec3 d, float tmax, out vec3 nb) {
   float best = 1e9;
   nb = vec3(0.0, 1.0, 0.0);
   if (uCarb <= 0.0) return best;
-  int NS = int(uCarb * 22.0);
+  int NS = min(int(uCarb * 40.0), 48);
   float H = SURF_Y - INNER_BOTTOM;
   vec2 dxz = d.xz;
   float a2 = max(dot(dxz, dxz), 1e-6);
-  for (int i = 0; i < 34; i++) {
+  for (int i = 0; i < 48; i++) {
     if (i >= NS) break;
     float fi = float(i);
     float h1 = hash12(vec2(fi, 3.1)), h2 = hash12(vec2(fi, 7.7)), h3 = hash12(vec2(fi, 11.3));
     vec2 c; float ybase = INNER_BOTTOM;
     if (h1 < 0.55 || uBoil > 0.5) { float a = h2 * 6.2832, r = sqrt(h3) * R_IN * 0.9; c = r * vec2(cos(a), sin(a)); }
     else { float a = h2 * 6.2832; c = (R_IN - 0.0012) * vec2(cos(a), sin(a)); ybase = INNER_BOTTOM + h3 * H * 0.8; }
-    float sp = mix(0.004, 0.012, hash12(vec2(fi, 5.5))) * (uBoil > 0.5 ? 1.7 : 1.0);
-    float speed = uRise * mix(0.8, 1.2, h3);
-    float ph = fract(uTime * speed / sp + h2 * 17.0);
+    // A bubble train. Each site emits at a steady rate; a bubble's radius
+    // grows linearly with age as dissolved gas diffuses in (r = r0 + g t), and
+    // its rise speed scales as r^2, so trains accelerate and their spacing
+    // widens towards the top - the look of a champagne or beer bubble column.
+    // Boiling bubbles are born near full size instead.
+    float Hc = SURF_Y - 0.0008 - ybase;
+    float Rt = uBubR * mix(0.75, 1.25, hash12(vec2(fi, 9.1)));
+    float r0 = Rt * (uBoil > 0.5 ? 0.7 : 0.2);
+    float vt = uRise * mix(0.8, 1.2, h3);            // speed at radius Rt
+    float gr = vt * (Rt * Rt * Rt - r0 * r0 * r0) / (3.0 * Hc * Rt * Rt);
+    float freq = mix(6.0, 22.0, hash12(vec2(fi, 5.5))) * (uBoil > 0.5 ? 0.6 : 1.0);
+    float ph = h2 * 17.0;
     float tc = clamp(dot(c - p.xz, dxz) / a2, 0.0, tmax);
-    float y = p.y + d.y * tc;
-    if (y < ybase - 0.002 || y > SURF_Y) continue;
-    float k = floor((y - ybase) / sp - ph + 0.5);
-    for (int j = 0; j < 2; j++) {
-      float kk = k + float(j) - 0.0;
-      float yb = ybase + (kk + ph) * sp;
-      if (yb < ybase || yb > SURF_Y - 0.0008) continue;
-      float u = (yb - ybase) / H;
-      // bubbles grow as they rise (CO2 diffuses in, pressure drops)
-      float r = uBubR * (0.35 + 0.65 * u) * mix(0.7, 1.3, hash12(vec2(fi, kk)));
-      vec3 cc = vec3(c.x + 0.0007 * sin(yb * 900.0 + fi), yb, c.y + 0.0007 * cos(yb * 800.0 + fi));
+    float y = p.y + d.y * tc - ybase;
+    if (y < -0.002 || y > Hc + 0.001) continue;
+    // age of a bubble at height y, inverted from y(t) = vt/Rt^2 ((r0+gt)^3 - r0^3)/(3g)
+    float K = vt / (Rt * Rt * 3.0 * gr);
+    float age = (pow(max(y, 0.0) / K + r0 * r0 * r0, 1.0 / 3.0) - r0) / gr;
+    float kc = floor((uTime - age) * freq + ph);
+    for (int j = -1; j < 2; j++) {
+      float kk = kc + float(j);
+      float tk = uTime - (kk - ph) / freq;             // this bubble's age
+      if (tk < 0.0) continue;
+      float rk = r0 + gr * tk;
+      float yb = K * (pow(rk, 3.0) - r0 * r0 * r0);
+      if (yb > Hc) continue;
+      float r = rk * mix(0.85, 1.15, hash12(vec2(fi, kk)));
+      // a slight helical wobble as the wake sheds
+      vec3 cc = vec3(c.x + 0.0005 * sin(yb * 900.0 + fi), ybase + yb, c.y + 0.0005 * cos(yb * 800.0 + fi));
       vec3 oc = p - cc;
       float b = dot(oc, d), disc = b * b - (dot(oc, oc) - r * r);
       if (disc < 0.0) continue;
@@ -453,9 +512,21 @@ void main() {
   // frost: moisture from the air freezes on glass chilled by a cryogenic liquid
   if (uFrost > 0.0 && r > R_IN + 0.0008 && vWorld.y > 0.0005) {
     float below = 1.0 - smoothstep(SURF_Y - 0.004, SURF_Y + 0.012, vWorld.y);
-    float fn = vnoise(vWorld.xy * 420.0 + vWorld.z * 200.0) * 0.6 + vnoise(vWorld.xy * 110.0 - vWorld.z * 60.0) * 0.4;
-    float f = uFrost * below * smoothstep(0.35, 0.7, fn + 0.3 * uFrost) * 0.8;
-    vec3 frost = vec3(0.9, 0.93, 0.97) / PI * (windowLight(n) + ambient(n)) * (0.8 + 0.3 * fn);
+    // sampled on the unwrapped glass (arc length, height) so the pattern
+    // doesn't smear around the cylinder
+    vec2 g = vec2(atan(vWorld.z, vWorld.x) * R_OUT, vWorld.y);
+    // frost nucleates in patches and fills in from the cold bottom up; the
+    // crystals grow as feathery streaks
+    float patchy = vnoise(g * 90.0) * 0.55 + vnoise(g * 260.0 + 3.1) * 0.3 + vnoise(g * 700.0) * 0.15;
+    float growth = uFrost * (1.2 - (vWorld.y - INNER_BOTTOM) / max(SURF_Y - INNER_BOTTOM, 0.01) * 0.5);
+    float fern = vnoise(vec2(g.x * 2600.0 + g.y * 900.0, g.y * 350.0)) * vnoise(vec2(g.x * 2200.0 - g.y * 800.0, g.y * 420.0 + 5.0));
+    float fn = patchy;
+    float f = below * smoothstep(0.55, 0.75, patchy + growth * 0.6 - 0.3) * (0.75 + 0.5 * fern) * min(uFrost * 1.5, 1.0);
+    f = clamp(f, 0.0, 0.95);
+    vec3 frost = vec3(0.9, 0.93, 0.97) / PI * (windowLight(n) + ambient(n)) * (0.75 + 0.5 * fern);
+    // ice crystals catch the light as tiny glints
+    float glint = step(0.985, hash12(floor(g * 5000.0))) * pow(max(dot(reflect(-normalize(uCamPos - vWorld), n), LW), 0.0), 8.0);
+    frost += glint * 3.0;
     col = mix(col, frost, f * 0.85);
     alpha = mix(alpha, 1.0, f * 0.85);
   }
@@ -530,9 +601,10 @@ float steamD(vec3 p) {
 }
 float fogD(vec3 p) {
   float r = length(p.xz);
-  vec3 q = p * vec3(70.0, 110.0, 70.0) + vec3(0.0, uTime * 2.2, 0.0);
-  q.xz += vec2(sin(p.y * 60.0 + uTime), cos(p.y * 50.0 - uTime)) * 0.6;
-  float n = vnoise3(q) * 0.55 + vnoise3(q * 2.1 + 5.0) * 0.3 + vnoise3(q * 4.7 + 9.0) * 0.15;
+  // soft, billowing wisps (millimetres to centimetres): coarse octaves only
+  vec3 q = p * vec3(40.0, 60.0, 40.0) + vec3(0.0, uTime * 1.3, 0.0);
+  q.xz += vec2(sin(p.y * 60.0 + uTime), cos(p.y * 50.0 - uTime)) * 0.5;
+  float n = vnoise3(q) * 0.6 + vnoise3(q * 2.1 + 5.0) * 0.3 + vnoise3(q * 4.3 + 9.0) * 0.1;
   float d = 0.0;
   // a dense blanket filling the headspace above the boiling liquid
   if (r < R_IN && p.y > SURF_Y) d += (1.0 - 0.6 * smoothstep(0.0, RIM_Y - SURF_Y, p.y - SURF_Y)) * (1.0 - smoothstep(RIM_Y - 0.004, RIM_Y + 0.012, p.y));
@@ -545,7 +617,7 @@ float fogD(vec3 p) {
   }
   // pooled on the bench, spreading out
   d += exp(-p.y / 0.005) * exp(-max(r - R_OUT, 0.0) / 0.05) * step(R_OUT - 0.001, r) * 0.6;
-  return d * max(n - 0.42, 0.0) * 2.6 * 45.0;
+  return d * smoothstep(0.3, 0.75, n) * 0.9 * 45.0;
 }
 void main() {
   vec3 ro = uCamPos, rd = normalize(vWorld - uCamPos);
@@ -554,10 +626,11 @@ void main() {
   vec3 tn = min(t0, t1), tf = max(t0, t1);
   float ta = max(max(max(tn.x, tn.y), tn.z), 0.0), tb = min(min(tf.x, tf.y), tf.z);
   if (tb <= ta) discard;
-  const int STEPS = 56;
+  const int STEPS = 96;
   float dt = (tb - ta) / float(STEPS);
-  // interleaved-gradient noise: a smooth, blue-ish dither instead of speckle
-  float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  // per-pixel jitter (interleaved-gradient noise's diagonal structure shows
+  // as a cross-hatch when a dense medium is undersampled)
+  float ign = hash12(gl_FragCoord.xy + fract(uTime) * 91.7);
   float t = ta + dt * ign;
   float trans = 1.0;
   vec3 col = vec3(0.0);
@@ -568,10 +641,10 @@ void main() {
   for (int i = 0; i < STEPS; i++) {
     vec3 p = ro + rd * t;
     float r = length(p.xz);
-    // occluders: liquid, glass wall, bench
+    // occluders: the liquid and the bench (the glass wall is transparent -
+    // testing it at sample points would randomly cut off the fog inside)
     if (p.y < 0.0) break;
     if (r < R_IN && p.y < SURF_Y) break;
-    if (r > R_IN && r < R_OUT && p.y < RIM_Y) break;
     float d = uVapor > 0.0 ? steamD(p) : fogD(p);
     if (d > 0.0) {
       float a = 1.0 - exp(-d * dt);

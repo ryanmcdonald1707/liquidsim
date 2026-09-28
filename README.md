@@ -91,8 +91,9 @@ The wave solver is rebuilt for each liquid, so they genuinely behave differently
 
 **Special behaviour:**
 - **Gas bubbles:** fizzy drinks carry rising streams of CO₂ bubbles from nucleation sites on the bottom and wall. Each bubble grows as it rises, at a rise speed set by Stokes' law or the inertial limit. Each shows the bright silvery rim that total internal reflection gives a gas bubble in liquid, and bursting bubbles keep the surface prickling.
-- **Foam heads:** beer and cola pour with a head that decays with its own half-life, from seconds for cola to minutes for nitro stout. The head damps the waves. Stirring, or pouring something in, whips up more.
-- **Liquid nitrogen:** it boils violently and frosts the outside of the glass below the liquid line. A dense cold fog fills the headspace, spills over the rim, and pools on the bench. Hot coffee and tea steam instead.
+- **Bubble trains:** each nucleation site emits bubbles at a steady rate. A bubble grows as dissolved gas diffuses in, and its rise speed scales as r², so trains accelerate and their spacing widens towards the top, the classic champagne and beer bubble column. Height against age inverts in closed form, so the shader finds the bubbles near each ray analytically.
+- **Foam heads:** beer and cola pour with a head that decays with its own half-life, from seconds for cola to minutes for nitro stout. The head drains from below: wet, with bigger bubbles and more beer at the bottom, and dry and fine on top. Its lower edge thins softly into the beer, and against the glass the cells press flat into polygons outlined by their liquid-filled Plateau borders. The head damps the waves. Stirring, or pouring something in, whips up more.
+- **Liquid nitrogen:** it boils violently and frosts the outside of the glass below the liquid line within seconds. The frost grows in patches, filling in from the cold bottom up, as feathery crystals that glint. A dense cold fog fills the headspace, spills over the rim, and pools on the bench. Hot coffee and tea steam instead.
 - **Ferrofluid:** turn on the magnet (`G`) and the surface rises into the hexagonal Rosensweig spike pattern. The spike spacing is the capillary wavelength 2π·√(σ/ρg), so the gravity slider changes it too.
 
 The **gravity** slider (Moon to Jupiter) and **fill** slider rebuild the modes too. The **Physics** panel shows the numbers that follow from the physics: capillary length, meniscus height, slowest ripple speed, Bond number, and slosh frequency and decay.
@@ -100,7 +101,7 @@ The **gravity** slider (Moon to Jupiter) and **fill** slider rebuild the modes t
 **Additives:** milk, cream, blue, red and green food dye, ink, espresso, grenadine, honey, and olive oil.
 - Miscible ones mix in a real 3D flow (`src/mix3d.js`), described below.
 - Grenadine and honey are much denser, so they fall straight through, hit the bottom, and spread out as a layer (a layered drink) until you stir them in.
-- Olive oil floats as an immiscible golden layer that keeps sharp edges and calms the ripples.
+- Olive oil floats as an immiscible golden layer that keeps sharp edges and calms the ripples. It spreads from where it lands as a gravity current, R(t) ≈ 1.1·(g′Vt²)^¼, covering the surface in about a third of a second behind a thin tapering front. Oil denser than the liquid (on liquid nitrogen) stays a lens.
 - On mercury, everything floats as a film over the mirror.
 
 Switching additive keeps whatever is already mixed in, and a floating oil layer stays put.

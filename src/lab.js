@@ -146,6 +146,8 @@ const meshes = {
   quad: G.mesh(gl, geo.quad()),
 };
 const VAPOR_BOX = [-0.16, 0.0, -0.16, 0.16, D.RIM_Y + 0.2, 0.16];
+// cold fog sinks: it never rises far above the rim, so march a tighter box
+const FOG_BOX = [-0.12, 0.0, -0.12, 0.12, D.RIM_Y + 0.03, 0.12];
 meshes.vapor = G.mesh(gl, geo.box(...VAPOR_BOX));
 
 // ---------------------------------------------------------------------------
@@ -263,7 +265,12 @@ function pour() {
   state.pourDur = state.pour = add.drops ? 0.35 : 1.4;
   const a = Math.random() * Math.PI * 2, r = Math.random() * 0.012;
   state.pourPos = [r * Math.cos(a), r * Math.sin(a)];
-  if (add.immiscible) { state.oil += add.amount; modal.setExtraDamping(oilDamping()); updateReadout(); return; }
+  if (add.immiscible) {
+    state.oil += add.amount;
+    // a new pour spreads from where it lands (unless the layer already covers the surface)
+    if (!state.oilSpread || state.oilSpread.R < D.R_IN) state.oilSpread = { x: state.pourPos[0], z: state.pourPos[1], R: 0, t: 0 };
+    modal.setExtraDamping(oilDamping()); updateReadout(); return;
+  }
   state.poured = true;
   const base = LIQUIDS[state.liquid];
   if (base.foam) state.foamH = Math.min(base.foam * 1.2, state.foamH + base.foam * 0.5);
@@ -302,7 +309,7 @@ function setLiquid(key) {
   state.liquid = key;
   const liq = LIQUIDS[key];
   state.base = { sigA: liq.sigA.slice(), sigS: liq.sigS.slice() };
-  state.addTotal = state.oil = 0;
+  state.addTotal = state.oil = 0; state.oilSpread = null;
   mixer.reset();
   state.poured = false;
   state.foamH = liq.foam || 0; state.frost = 0; state.spike = 0;
@@ -481,7 +488,7 @@ function stepPhysics(dt) {
   }
   modal.setExtraDamping(Math.round(oilDamping() * 40) / 40); // quantised: rebuilding propagators costs ~4 ms
   // frost builds on glass holding a cryogenic liquid
-  state.frost += ((liq.vapor === 'fog' ? 1 : 0) - state.frost) * (1 - Math.exp(-dt / (liq.vapor === 'fog' ? 12 : 3)));
+  state.frost += ((liq.vapor === 'fog' ? 1 : 0) - state.frost) * (1 - Math.exp(-dt / (liq.vapor === 'fog' ? 4 : 3)));
   // ferrofluid spikes grow when the magnet is on (and relax when it's off)
   state.spike += ((liq.magnetic && state.magnet ? 7 : 0) - state.spike) * (1 - Math.exp(-dt * (state.magnet ? 3 : 6)));
   const pouring = state.pour > 0;
@@ -527,6 +534,16 @@ function stepPhysics(dt) {
     uFroth: [0, 0, 0, 0], uDecay: [decay, 0, 0], uDiffuse: perFrame(diffuse, dt), uDiffuseG: perFrame(0.02, dt), uCap: cap, uSrcGain: srcGain,
   }); dye.swap();
   if (pouring) state.pour -= dt;
+  // floating oil spreads over the surface as a gravity current: for an
+  // axisymmetric inertial current R(t) ~ 1.1 (g' V t^2)^(1/4), g' = g drho/rho.
+  // Oil denser than the liquid (on liquid nitrogen) stays a lens.
+  if (state.oilSpread) {
+    const o = state.oilSpread;
+    o.t += dt;
+    const V = state.oil * Math.PI * D.R_IN ** 2 * (state.fill - D.INNER_BOTTOM);
+    const gp = g * (liq.rho - ADDITIVES.oil.rho) / liq.rho;
+    if (gp > 0) o.R = Math.min(1.3 * D.R_IN, Math.max(o.R, 1.1 * Math.pow(gp * V * o.t * o.t, 0.25)));
+  }
 
   // the bulk: 3D flow carrying the additive (sinking, rising, plunging, stirred)
   {
@@ -636,7 +653,9 @@ function render() {
     uDn: liq.metal || add.immiscible ? 0 : (add.ior || liq.ior) - liq.ior, uRodA: rA, uRodB: rB, uRodIn: rod.blend > 0.6 ? 1 : 0,
     uOilA: ADDITIVES.oil.sigA, uOilS: ADDITIVES.oil.sigS, uHasOil: state.oil > 0 ? 1 : 0,
     uHasAdd: state.poured ? 1 : 0,
-    uOilThick: state.oil * (state.fill - D.INNER_BOTTOM),
+    // the layer is thicker while it is still spreading
+    uOilThick: state.oil * (state.fill - D.INNER_BOTTOM) * Math.min(4, (D.R_IN / Math.max(Math.min(state.oilSpread ? state.oilSpread.R : 0, D.R_IN), 0.02)) ** 2),
+    uOilSpread: state.oilSpread ? [state.oilSpread.x, state.oilSpread.z, state.oilSpread.R] : [0, 0, 0],
     uCarb: liq.carb || 0, uBubR: liq.bubble || 0.0005, uRise: liq.carb ? riseSpeed(liq) : 0, uBoil: liq.boil ? 1 : 0,
     uFoamH: state.foamH, uFoamCol: liq.foamCol || [0.95, 0.93, 0.88], uFrost: state.frost,
   };
@@ -683,7 +702,7 @@ function render() {
   if (liq.vapor) {
     gl.disable(gl.DEPTH_TEST);
     gl.cullFace(gl.FRONT);
-    G.use(gl, P.vapor, { ...U, uVapor: liq.vapor === 'fog' ? -1 : 1, uBoxMin: VAPOR_BOX.slice(0, 3), uBoxMax: VAPOR_BOX.slice(3) });
+    G.use(gl, P.vapor, { ...U, uVapor: liq.vapor === 'fog' ? -1 : 1, uBoxMin: (liq.vapor === 'fog' ? FOG_BOX : VAPOR_BOX).slice(0, 3), uBoxMax: (liq.vapor === 'fog' ? FOG_BOX : VAPOR_BOX).slice(3) });
     meshes.vapor.draw();
     gl.enable(gl.DEPTH_TEST);
   }
